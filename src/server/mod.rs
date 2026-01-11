@@ -58,6 +58,12 @@ pub struct NowPlayingResponse {
     pub count: usize,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct ReconnectResponse {
+    pub success: bool,
+    pub message: String,
+}
+
 /// Embedded SPA HTML
 const SPA_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
@@ -89,18 +95,20 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
         .status {
             display: inline-block;
-            padding: 4px 12px;
-            border-radius: 12px;
-            font-size: 0.85rem;
-            margin-top: 10px;
+            padding: 0;
+            border: none;
+            border-radius: 0;
+            background: none;
+            font-size: 1.0rem;
+            font-weight: 500;
         }
         .status.connected {
-            background: #2ecc71;
-            color: #000;
+            color: #2ecc71;
+            background: none;
         }
         .status.disconnected {
-            background: #e74c3c;
-            color: #fff;
+            color: #e74c3c;
+            background: none;
         }
         .reconnect-btn {
             padding: 6px 14px;
@@ -118,6 +126,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
         .reconnect-btn:active {
             background: #1f6ca0;
+        }
+        .reconnect-btn:disabled {
+            background: #95a5a6;
+            cursor: not-allowed;
+            opacity: 0.6;
         }
         .zone-selector {
             display: flex;
@@ -700,8 +713,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             // Check WebSocket connection first
             if (!wsConnected) {
                 statusEl.className = 'status disconnected';
-                statusEl.textContent = 'Connection Error';
-                reconnectBtn.style.display = 'inline-block';
+                statusEl.textContent = 'Can\'t Connect To Server';
+                reconnectBtn.style.display = 'none';  // Don't show reconnect button - server is down
                 // Don't show auth overlay when server is down - just hide it
                 updateAuthOverlay(true);  // Pass true to hide overlay
                 return;
@@ -725,8 +738,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 }
             } catch (e) {
                 statusEl.className = 'status disconnected';
-                reconnectBtn.style.display = 'inline-block';
-                statusEl.textContent = 'Connection Error';
+                reconnectBtn.style.display = 'none';  // Don't show reconnect button - can't reach our server
+                statusEl.textContent = 'Can\'t Connect To Server';
                 // Don't show auth overlay for connection errors
                 updateAuthOverlay(true);  // Pass true to hide overlay
             }
@@ -755,18 +768,51 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
 
         // Reconnect to Roon Server
-        function reconnectToRoon() {
+        async function reconnectToRoon() {
             console.log('Reconnecting to Roon Server...');
-            // Close existing WebSocket connection
-            if (ws) {
-                ws.close();
+            const reconnectBtn = document.getElementById('reconnect-btn');
+
+            // Disable button and show loading state
+            if (reconnectBtn) {
+                reconnectBtn.disabled = true;
+                reconnectBtn.textContent = 'Reconnecting...';
             }
-            // Clear reconnect timeout
-            if (reconnectTimeout) {
-                clearTimeout(reconnectTimeout);
+
+            try {
+                // Call the backend reconnect endpoint
+                const response = await fetch('/reconnect', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                });
+
+                const data = await response.json();
+                console.log('Reconnect response:', data);
+
+                if (data.success) {
+                    // Wait a moment for the connection to establish
+                    setTimeout(() => {
+                        updateStatus();
+                        if (reconnectBtn) {
+                            reconnectBtn.disabled = false;
+                            reconnectBtn.textContent = 'Reconnect to Roon Server';
+                        }
+                    }, 2000);
+                } else {
+                    console.error('Reconnect failed:', data.message);
+                    if (reconnectBtn) {
+                        reconnectBtn.disabled = false;
+                        reconnectBtn.textContent = 'Reconnect to Roon Server';
+                    }
+                }
+            } catch (e) {
+                console.error('Error reconnecting:', e);
+                if (reconnectBtn) {
+                    reconnectBtn.disabled = false;
+                    reconnectBtn.textContent = 'Reconnect to Roon Server';
+                }
             }
-            // Reload the page to re-establish all connections
-            window.location.reload();
         }
 
         // Track mute state for each zone
@@ -1050,6 +1096,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
         .route("/", get(spa_handler))
         .route("/ws", get(ws_handler))
         .route("/status", get(status_handler))
+        .route("/reconnect", post(reconnect_handler))
         .route("/zones", get(zones_handler))
         .route("/now-playing", get(now_playing_handler))
         .route("/queue/:zone_id", get(queue_handler))
@@ -1099,6 +1146,25 @@ async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
         core_name,
         message,
     })
+}
+
+async fn reconnect_handler(State(state): State<AppState>) -> Json<ReconnectResponse> {
+    let mut client = state.roon_client.lock().await;
+
+    match client.reconnect().await {
+        Ok(_) => {
+            Json(ReconnectResponse {
+                success: true,
+                message: "Reconnection initiated. Please check status.".to_string(),
+            })
+        }
+        Err(e) => {
+            Json(ReconnectResponse {
+                success: false,
+                message: format!("Reconnection failed: {}", e),
+            })
+        }
+    }
 }
 
 async fn zones_handler(State(state): State<AppState>) -> Json<ZonesResponse> {

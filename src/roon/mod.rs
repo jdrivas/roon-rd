@@ -67,6 +67,12 @@ impl RoonClient {
         self.ws_tx.subscribe()
     }
 
+    /// Reconnect to Roon Core (triggers a new discovery)
+    pub async fn reconnect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        log::info!("Reconnecting to Roon Core...");
+        self.connect().await
+    }
+
     /// Start the Roon API connection
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
         log::info!("Connecting to Roon Core...");

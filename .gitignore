@@ -1,5 +1,6 @@
 # Rust build artifacts
 /target
+/release
 Cargo.lock
 
 # Runtime configuration (contains auth tokens)
