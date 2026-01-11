@@ -21,6 +21,12 @@ pub enum WsMessage {
     ZonesChanged,
     #[serde(rename = "connection_changed")]
     ConnectionChanged { connected: bool },
+    #[serde(rename = "seek_updated")]
+    SeekUpdated {
+        zone_id: String,
+        seek_position: Option<i64>,
+        queue_time_remaining: i64,
+    },
 }
 
 /// Wrapper for Roon API client with state management
@@ -261,17 +267,21 @@ impl RoonClient {
                                 log::debug!("Zone seek position updated");
                                 let mut zone_map = zones.write().await;
 
-                                // Update seek positions
+                                // Update seek positions and broadcast individual updates
                                 for zone_seek in zones_seek {
                                     if let Some(zone) = zone_map.get_mut(&zone_seek.zone_id) {
                                         if let Some(now_playing) = zone.now_playing.as_mut() {
                                             now_playing.seek_position = zone_seek.seek_position;
                                         }
                                     }
-                                }
 
-                                // Broadcast zone change via WebSocket
-                                let _ = ws_tx.send(WsMessage::ZonesChanged);
+                                    // Broadcast seek update for this zone
+                                    let _ = ws_tx.send(WsMessage::SeekUpdated {
+                                        zone_id: zone_seek.zone_id,
+                                        seek_position: zone_seek.seek_position,
+                                        queue_time_remaining: zone_seek.queue_time_remaining,
+                                    });
+                                }
                             }
                             Parsed::Jpeg((image_key, data)) => {
                                 log::debug!("Received JPEG image: {} ({} bytes)", image_key, data.len());

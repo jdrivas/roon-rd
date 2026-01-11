@@ -216,7 +216,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
         .zone-header {
             display: flex;
-            justify-content: space-between;
+            justify-content: flex-end;
             align-items: center;
             margin-bottom: 15px;
         }
@@ -346,12 +346,25 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .track-details-top {
             flex: 0 0 auto;
         }
+        .zone-controls-container {
+            display: flex;
+            flex-direction: column;
+            align-items: flex-start;
+            align-self: flex-end;
+            margin-top: 12px;
+        }
+        .zone-name-label {
+            font-weight: 600;
+            font-size: 1rem;
+            color: #ecf0f1;
+            margin-bottom: 8px;
+            width: 100%;
+            text-align: right;
+        }
         .zone-controls {
             display: flex;
             align-items: center;
-            justify-content: flex-end;
             gap: 8px;
-            margin-top: 15px;
             min-width: fit-content;
             flex-shrink: 0;
         }
@@ -567,7 +580,89 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         let selectedZone = 'all';
         let availableZones = [];  // All zones from /zones
         let nowPlayingZones = [];  // Playing/paused zones from /now-playing
+        let timeDisplayMode = {};  // Track time display mode per zone: true = show remaining, false = show total
         const placeholderSvg = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
+
+        // SVG icons for different zone types
+        const zoneIcons = {
+            speaker: '<svg viewBox="0 0 24 24" fill="currentColor" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/></svg>',
+            headphones: '<svg viewBox="0 0 24 24" fill="currentColor" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M12 1c-4.97 0-9 4.03-9 9v7c0 1.66 1.34 3 3 3h3v-8H5v-2c0-3.87 3.13-7 7-7s7 3.13 7 7v2h-4v8h3c1.66 0 3-1.34 3-3v-7c0-4.97-4.03-9-9-9z"/></svg>',
+            computer: '<svg viewBox="0 0 24 24" fill="currentColor" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M20 18c1.1 0 1.99-.9 1.99-2L22 6c0-1.1-.9-2-2-2H4c-1.1 0-2 .9-2 2v10c0 1.1.9 2 2 2H0v2h24v-2h-4zM4 6h16v10H4V6z"/></svg>',
+            phone: '<svg viewBox="0 0 24 24" fill="currentColor" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M17 1.01L7 1c-1.1 0-2 .9-2 2v18c0 1.1.9 2 2 2h10c1.1 0 2-.9 2-2V3c0-1.1-.9-1.99-2-1.99zM17 19H7V5h10v14z"/></svg>',
+            network: '<svg viewBox="0 0 24 24" fill="currentColor" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M12 2C6.48 2 2 6.48 2 12s4.48 10 10 10 10-4.48 10-10S17.52 2 12 2zm-1 17.93c-3.95-.49-7-3.85-7-7.93 0-.62.08-1.21.21-1.79L9 15v1c0 1.1.9 2 2 2v1.93zm6.9-2.54c-.26-.81-1-1.39-1.9-1.39h-1v-3c0-.55-.45-1-1-1H8v-2h2c.55 0 1-.45 1-1V7h2c1.1 0 2-.9 2-2v-.41c2.93 1.19 5 4.06 5 7.41 0 2.08-.8 3.97-2.1 5.39z"/></svg>',
+            dac: '<svg viewBox="0 0 120 80" fill="none" stroke="white" stroke-width="0.8" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;">\
+<!-- 3D perspective view: 444mm(w) x 151mm(h) x 435mm(d) with 25° Y-axis and 15° X-axis rotation -->\
+<!-- Top surface (rotated down 25°) - more visible -->\
+<path d="M 15 30 L 105 30 L 115 10 L 25 10 Z" fill="none" stroke="white" opacity="0.7"/>\
+<!-- Right side surface -->\
+<path d="M 105 30 L 115 10 L 115 50 L 105 65 Z" fill="none" stroke="white" opacity="0.6"/>\
+<!-- Front panel (main face 444:151 ratio) -->\
+<rect x="15" y="30" width="90" height="35" rx="0.5" fill="none" stroke="white" stroke-width="1.0"/>\
+<!-- Display screen on left (vertically centered) -->\
+<rect x="20" y="43.5" width="16" height="8" rx="0.3" fill="none" stroke="white" stroke-width="1.0"/>\
+<!-- Rotary control knob on right -->\
+<circle cx="92" cy="47.5" r="3.5" fill="none" stroke="white" stroke-width="1.0"/>\
+<circle cx="92" cy="47.5" r="1" fill="white" stroke="none"/>\
+</svg>',
+            oldara: '<svg viewBox="0 0 120 80" fill="none" stroke="white" stroke-width="0.8" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;">\
+<!-- 3D perspective view: Oldara Player with curved face plate -->\
+<!-- Top surface (rotated down 25°) with curve to meet face plate -->\
+<path d="M 15 33.5 Q 60 28 105 33.5 L 115 13.5 Q 70 8 25 13.5 Z" fill="none" stroke="white" opacity="0.7"/>\
+<!-- Right side surface with curves -->\
+<path d="M 105 33.5 L 115 13.5 L 115 48.5 L 105 61.5" fill="none" stroke="white" opacity="0.6"/>\
+<!-- Front panel with curved horizontal lines (top edge) - edges 20% smaller -->\
+<path d="M 15 33.5 Q 60 28 105 33.5" fill="none" stroke="white" stroke-width="1.0"/>\
+<!-- Front panel with curved horizontal lines (bottom edge) - edges 20% smaller -->\
+<path d="M 15 61.5 Q 60 67 105 61.5" fill="none" stroke="white" stroke-width="1.0"/>\
+<!-- Vertical edges with more rounding -->\
+<path d="M 15 33.5 Q 17 47.5 15 61.5" fill="none" stroke="white" stroke-width="1.0"/>\
+<path d="M 105 33.5 Q 103 47.5 105 61.5" fill="none" stroke="white" stroke-width="1.0"/>\
+<!-- Round display on right (like dCS knob) -->\
+<circle cx="88" cy="47.5" r="5" fill="none" stroke="white" stroke-width="1.0"/>\
+<circle cx="88" cy="47.5" r="1.5" fill="white" stroke="none"/>\
+</svg>',
+            waveform: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M2 12h3l2-6 2 12 2-9 2 6 2-3h5"/></svg>',
+            conversion: '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M3 12h3v-3h2v6h2v-4h2"/><path d="M14 9c0 1.5 1 3 2.5 3s2.5-1.5 2.5-3-1-3-2.5-3-2.5 1.5-2.5 3z" fill="none"/><line x1="12" y1="6" x2="12" y2="15"/></svg>',
+            default: '<svg viewBox="0 0 24 24" fill="currentColor" style="width: 40px; height: 40px; vertical-align: middle; margin-left: 8px;"><path d="M12 3v9.28c-.47-.17-.97-.28-1.5-.28C8.01 12 6 14.01 6 16.5S8.01 21 10.5 21c2.31 0 4.2-1.75 4.45-4H15V6h4V3h-7z"/></svg>'
+        };
+
+        // Detect zone icon based on zone name and device names
+        function getZoneIcon(zoneName, devices) {
+            const nameAndDevices = (zoneName + ' ' + (devices || []).join(' ')).toLowerCase();
+
+            // Check for Oldara Player
+            if (nameAndDevices.match(/oldara/)) {
+                return zoneIcons.oldara;
+            }
+
+            // Check for audiophile DAC/high-end equipment patterns
+            if (nameAndDevices.match(/dac|dcs|vivaldi|apex|upsampler|rossini|bartok|lina|mosaic|chord|hugo|dave|mscaler|ayre|berkeley|ps audio|directstream|antipodes|lumin|aurender|esoteric|accuphase|meitner|emm labs|weiss|nagra|mytek|benchmark|holo audio|rockna|totaldac/)) {
+                return zoneIcons.dac;
+            }
+
+            // Check for headphone patterns
+            if (nameAndDevices.match(/headphone|earphone|earbud|airpod|beats|sennheiser|akg|audeze/)) {
+                return zoneIcons.headphones;
+            }
+
+            // Check for computer patterns
+            if (nameAndDevices.match(/mac|pc|computer|laptop|desktop|imac|macbook/)) {
+                return zoneIcons.computer;
+            }
+
+            // Check for phone/tablet patterns
+            if (nameAndDevices.match(/phone|iphone|android|ipad|tablet|mobile/)) {
+                return zoneIcons.phone;
+            }
+
+            // Check for network/streaming patterns
+            if (nameAndDevices.match(/roon|chromecast|airplay|sonos|network|stream|bridge/)) {
+                return zoneIcons.network;
+            }
+
+            // Default to speaker icon
+            return zoneIcons.speaker;
+        }
 
         function formatTime(seconds) {
             if (seconds == null) return '0:00';
@@ -612,7 +707,6 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             return `
                 <div class="zone" data-zone-id="${zone.zone_id}">
                     <div class="zone-header">
-                        <span class="zone-name">${zone.zone_name}</span>
                         <span class="zone-state ${stateClass}">${zone.state.toLowerCase()}</span>
                     </div>
                     ${zone.track ? `
@@ -630,24 +724,132 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                             <div class="progress-fill" style="width: ${progress}%"></div>
                                         </div>
                                         <div class="progress-time">
-                                            <span>${formatTime(zone.position_seconds)}</span>
-                                            <span>${formatTime(zone.length_seconds)}</span>
+                                            <span class="current-time">${formatTime(zone.position_seconds)}</span>
+                                            <span class="total-time" onclick="toggleTimeDisplay('${zone.zone_id}')" style="cursor: pointer;" title="Click to toggle between total time and time remaining">${formatTime(zone.length_seconds)}</span>
                                         </div>
                                     </div>
                                 </div>
-                                <div class="zone-controls">
-                                    <button class="control-btn" onclick="showQueue('${zone.zone_id}')">▹≡</button>
-                                    <div style="width: 8px;"></div>
-                                    <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'previous')">⏮</button>
-                                    ${playPauseBtn}
-                                    <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">⏹ Stop</button>
-                                    <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">⏭</button>
+                                <div class="zone-controls-container">
+                                    <div class="zone-name-label">${zone.zone_name}${getZoneIcon(zone.zone_name, zone.devices)}</div>
+                                    <div class="zone-controls">
+                                        <button class="control-btn" onclick="showQueue('${zone.zone_id}')">▹≡</button>
+                                        <div style="width: 8px;"></div>
+                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'previous')">⏮</button>
+                                        ${playPauseBtn}
+                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">⏹ Stop</button>
+                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">⏭</button>
+                                    </div>
                                 </div>
                             </div>
                         </div>
                     ` : '<div class="no-playing">No track loaded</div>'}
                 </div>
             `;
+        }
+
+        // Create a new zone DOM element from zone data
+        function createZoneElement(zone) {
+            const div = document.createElement('div');
+            div.innerHTML = renderZone(zone);
+            return div.firstElementChild;
+        }
+
+        // Update an existing zone element with new data
+        function updateZoneElement(element, zone) {
+            const stateClass = zone.state.toLowerCase();
+
+            // Update zone header and zone name label
+            const zoneName = element.querySelector('.zone-name');
+            const zoneNameLabel = element.querySelector('.zone-name-label');
+            const zoneState = element.querySelector('.zone-state');
+            if (zoneName) zoneName.textContent = zone.zone_name;
+            if (zoneNameLabel) zoneNameLabel.innerHTML = zone.zone_name + getZoneIcon(zone.zone_name, zone.devices);
+            if (zoneState) {
+                zoneState.textContent = zone.state.toLowerCase();
+                zoneState.className = `zone-state ${stateClass}`;
+            }
+
+            // Update class on zone element
+            element.className = zone.state.toLowerCase() === 'stopped' ? 'zone stopped' : 'zone';
+
+            // If zone changed from/to stopped state, need to rebuild content
+            const wasStopped = element.classList.contains('stopped');
+            const isStopped = zone.state.toLowerCase() === 'stopped';
+
+            if (wasStopped !== isStopped) {
+                // State changed between stopped and playing/paused, rebuild the zone
+                const newElement = createZoneElement(zone);
+                element.replaceWith(newElement);
+                return;
+            }
+
+            // If still stopped, just update the header (already done above)
+            if (isStopped) {
+                return;
+            }
+
+            // Update playing/paused zone details
+            if (zone.track) {
+                const trackTitle = element.querySelector('.track-title');
+                const trackArtist = element.querySelector('.track-artist');
+                const trackAlbum = element.querySelector('.track-album');
+                const progressFill = element.querySelector('.progress-fill');
+                const progressTimes = element.querySelectorAll('.progress-time span');
+                const albumArt = element.querySelector('.album-art, .album-art-placeholder');
+
+                if (trackTitle) trackTitle.textContent = zone.track;
+                if (trackArtist) trackArtist.textContent = zone.artist || '';
+                if (trackAlbum) trackAlbum.textContent = zone.album || '';
+
+                // Update progress bar
+                const progress = zone.length_seconds > 0
+                    ? ((zone.position_seconds || 0) / zone.length_seconds * 100)
+                    : 0;
+                if (progressFill) progressFill.style.width = `${progress}%`;
+
+                // Update time displays
+                if (progressTimes.length >= 2) {
+                    progressTimes[0].textContent = formatTime(zone.position_seconds);
+
+                    // Update total/remaining time based on toggle mode
+                    const showRemaining = timeDisplayMode[zone.zone_id] || false;
+                    if (showRemaining) {
+                        const remaining = zone.length_seconds - (zone.position_seconds || 0);
+                        progressTimes[1].textContent = formatTime(remaining) + ' remaining';
+                    } else {
+                        progressTimes[1].textContent = formatTime(zone.length_seconds);
+                    }
+                }
+
+                // Update album art if changed
+                if (zone.image_key && albumArt) {
+                    if (albumArt.tagName === 'IMG') {
+                        const currentSrc = albumArt.getAttribute('src');
+                        const newSrc = `/image/${encodeURIComponent(zone.image_key)}`;
+                        if (currentSrc !== newSrc) {
+                            albumArt.setAttribute('src', newSrc);
+                        }
+                    } else {
+                        // Was placeholder, now has image - rebuild
+                        const newElement = createZoneElement(zone);
+                        element.replaceWith(newElement);
+                        return;
+                    }
+                }
+
+                // Update play/pause button
+                const isPlaying = zone.state.toLowerCase() === 'playing';
+                const playPauseBtn = element.querySelector('.zone-controls button:nth-child(3)');
+                if (playPauseBtn) {
+                    if (isPlaying) {
+                        playPauseBtn.innerHTML = '⏸ Pause';
+                        playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'pause')`);
+                    } else {
+                        playPauseBtn.innerHTML = '▶ Play';
+                        playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'play')`);
+                    }
+                }
+            }
         }
 
         function updateZoneSelector(zones) {
@@ -686,6 +888,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     return {
                         zone_id: zone.zone_id,
                         zone_name: zone.display_name,
+                        devices: zone.devices,  // Include devices for icon detection
                         state: nowPlaying.state,
                         track: nowPlaying.track,
                         artist: nowPlaying.artist,
@@ -699,6 +902,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     return {
                         zone_id: zone.zone_id,
                         zone_name: zone.display_name,
+                        devices: zone.devices,  // Include devices for icon detection
                         state: zone.state
                     };
                 }
@@ -727,9 +931,57 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
             if (zonesToShow.length === 0) {
                 container.innerHTML = '<div class="no-playing">No zones found</div>';
-            } else {
-                container.innerHTML = zonesToShow.map(renderZone).join('');
+                return;
             }
+
+            // DOM manipulation approach - update existing elements or create new ones
+            // Get current zone elements
+            const existingZones = new Map();
+            container.querySelectorAll('.zone').forEach(el => {
+                const zoneId = el.getAttribute('data-zone-id');
+                if (zoneId) {
+                    existingZones.set(zoneId, el);
+                }
+            });
+
+            // Track which zones we've processed
+            const processedZones = new Set();
+
+            // Update or create zones
+            zonesToShow.forEach((zone, index) => {
+                processedZones.add(zone.zone_id);
+                const existingZone = existingZones.get(zone.zone_id);
+
+                if (existingZone) {
+                    // Update existing zone element
+                    updateZoneElement(existingZone, zone);
+
+                    // Ensure correct order
+                    const currentIndex = Array.from(container.children).indexOf(existingZone);
+                    if (currentIndex !== index) {
+                        if (index >= container.children.length) {
+                            container.appendChild(existingZone);
+                        } else {
+                            container.insertBefore(existingZone, container.children[index]);
+                        }
+                    }
+                } else {
+                    // Create new zone element
+                    const newZone = createZoneElement(zone);
+                    if (index >= container.children.length) {
+                        container.appendChild(newZone);
+                    } else {
+                        container.insertBefore(newZone, container.children[index]);
+                    }
+                }
+            });
+
+            // Remove zones that are no longer shown
+            existingZones.forEach((element, zoneId) => {
+                if (!processedZones.has(zoneId)) {
+                    element.remove();
+                }
+            });
         }
 
         function updateAuthOverlay(roonConnected) {
@@ -805,6 +1057,71 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 renderZones();
             } catch (e) {
                 console.error('Error fetching now playing:', e);
+            }
+        }
+
+        // Update seek position for a specific zone (called by WebSocket)
+        function updateSeekPosition(zoneId, seekPosition, queueTimeRemaining) {
+            const zoneElement = document.querySelector(`[data-zone-id="${zoneId}"]`);
+            if (!zoneElement) return;
+
+            // Update progress bar
+            const progressFill = zoneElement.querySelector('.progress-fill');
+            const currentTime = zoneElement.querySelector('.current-time');
+            const totalTime = zoneElement.querySelector('.total-time');
+
+            // Find the zone data to get total length
+            const zoneData = nowPlayingZones.find(z => z.zone_id === zoneId);
+            if (!zoneData || !zoneData.length_seconds) return;
+
+            const position = seekPosition || 0;
+            const length = zoneData.length_seconds;
+            const percentage = (position / length) * 100;
+
+            if (progressFill) {
+                progressFill.style.width = `${percentage}%`;
+            }
+
+            if (currentTime) {
+                currentTime.textContent = formatTime(position);
+            }
+
+            // Update total time display based on toggle mode
+            if (totalTime) {
+                const showRemaining = timeDisplayMode[zoneId] || false;
+                if (showRemaining) {
+                    const remaining = length - position;
+                    totalTime.textContent = formatTime(remaining) + ' remaining';
+                } else {
+                    totalTime.textContent = formatTime(length);
+                }
+            }
+        }
+
+        // Toggle between showing total time and time remaining
+        function toggleTimeDisplay(zoneId) {
+            // Toggle the mode
+            timeDisplayMode[zoneId] = !timeDisplayMode[zoneId];
+
+            // Find the zone element and update the display
+            const zoneElement = document.querySelector(`[data-zone-id="${zoneId}"]`);
+            if (!zoneElement) return;
+
+            const totalTime = zoneElement.querySelector('.total-time');
+            if (!totalTime) return;
+
+            // Find the zone data
+            const zoneData = nowPlayingZones.find(z => z.zone_id === zoneId);
+            if (!zoneData || !zoneData.length_seconds) return;
+
+            const showRemaining = timeDisplayMode[zoneId];
+            if (showRemaining) {
+                // Show time remaining
+                const remaining = zoneData.length_seconds - (zoneData.position_seconds || 0);
+                totalTime.textContent = formatTime(remaining) + ' remaining';
+            } else {
+                // Show total time
+                totalTime.textContent = formatTime(zoneData.length_seconds);
             }
         }
 
@@ -1052,6 +1369,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             updateZones();
                             updateNowPlaying();
                         }
+                    } else if (msg.type === 'seek_updated') {
+                        // Only update seek position for this specific zone
+                        updateSeekPosition(msg.zone_id, msg.seek_position, msg.queue_time_remaining);
                     }
                 } catch (e) {
                     console.error('Error parsing WebSocket message:', e);
