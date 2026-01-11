@@ -63,6 +63,7 @@ Start on a custom port:
 
 When running in server mode, the following endpoints are available:
 
+- `GET /` - Single page application for displaying zones and playback in a browser
 - `GET /status` - Get Roon connection status
 - `GET /zones` - Get list of available zones
 - `GET /now-playing` - Get currently playing tracks
