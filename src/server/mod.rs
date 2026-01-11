@@ -99,7 +99,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             border: none;
             border-radius: 0;
             background: none;
-            font-size: 1.0rem;
+            font-size: 1.15rem;
             font-weight: 500;
         }
         .status.connected {
@@ -131,6 +131,24 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             background: #95a5a6;
             cursor: not-allowed;
             opacity: 0.6;
+        }
+        .fullscreen-btn {
+            padding: 6px 12px;
+            background: rgba(255, 255, 255, 0.1);
+            color: #fff;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 1.2rem;
+            line-height: 1;
+            transition: all 0.2s;
+        }
+        .fullscreen-btn:hover {
+            background: rgba(255, 255, 255, 0.15);
+            border-color: rgba(255, 255, 255, 0.3);
+        }
+        .fullscreen-btn:active {
+            background: rgba(255, 255, 255, 0.2);
         }
         .zone-selector {
             display: flex;
@@ -493,6 +511,26 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             color: #666;
             font-size: 0.75rem;
         }
+
+        /* Large screen mode - for fullscreen on big monitors */
+        @media (min-width: 1500px) {
+            .track-title {
+                font-size: 1.8rem;
+            }
+            .track-artist {
+                font-size: 1.4rem;
+            }
+            .track-album {
+                font-size: 1.2rem;
+            }
+            .control-btn {
+                font-size: 1.3rem;
+                padding: 12px 18px;
+            }
+            .progress-time {
+                font-size: 1.1rem;
+            }
+        }
     </style>
 </head>
 <body>
@@ -502,10 +540,13 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 <div id="connection-status" class="status disconnected">Connecting...</div>
                 <button id="reconnect-btn" class="reconnect-btn" onclick="reconnectToRoon()" style="display: none;">Reconnect to Roon Server</button>
             </div>
-            <div class="zone-dropdown">
-                <select id="zone-select">
-                    <option value="all">All Zones</option>
-                </select>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <button id="fullscreen-btn" class="fullscreen-btn" onclick="toggleFullscreen()" title="Toggle Fullscreen">⛶</button>
+                <div class="zone-dropdown">
+                    <select id="zone-select">
+                        <option value="all">All Zones</option>
+                    </select>
+                </div>
             </div>
         </nav>
         <main id="zones-container">
@@ -811,6 +852,21 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 if (reconnectBtn) {
                     reconnectBtn.disabled = false;
                     reconnectBtn.textContent = 'Reconnect to Roon Server';
+                }
+            }
+        }
+
+        // Toggle fullscreen mode
+        function toggleFullscreen() {
+            if (!document.fullscreenElement) {
+                // Enter fullscreen
+                document.documentElement.requestFullscreen().catch(err => {
+                    console.error('Error attempting to enable fullscreen:', err);
+                });
+            } else {
+                // Exit fullscreen
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
                 }
             }
         }
