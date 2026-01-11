@@ -64,16 +64,25 @@ mac-x64:
 	@echo "✓ macOS x64 binary: $(BIN_MAC_X64)"
 
 # Build Linux x64
-# Note: Cross-compilation from macOS requires additional setup
+# Uses 'cross' for cross-compilation from macOS (requires Docker)
 linux:
 	@echo "Building Linux x64 release..."
-	@echo "⚠️  Note: Cross-compiling to Linux from macOS may fail without proper toolchain."
-	@echo "    Consider building on a Linux machine instead."
-	@mkdir -p $(RELEASE_DIR)
-	-cargo build --release --target $(TARGET_LINUX_X64) && \
-		cp target/$(TARGET_LINUX_X64)/release/$(BINARY_NAME) $(BIN_LINUX_X64) && \
-		echo "✓ Linux x64 binary: $(BIN_LINUX_X64)" || \
-		echo "✗ Linux build failed - build on a Linux machine for best results"
+	@if ! command -v docker &> /dev/null && ! command -v podman &> /dev/null; then \
+		echo "⚠️  Docker or Podman required for Linux cross-compilation."; \
+		echo "    Install Docker Desktop from: https://www.docker.com/products/docker-desktop"; \
+		echo "    Or build on a Linux machine using: cargo build --release --target x86_64-unknown-linux-gnu"; \
+		echo "✗ Skipping Linux build"; \
+	else \
+		if ! command -v cross &> /dev/null; then \
+			echo "⚠️  'cross' not found. Installing..."; \
+			cargo install cross --git https://github.com/cross-rs/cross || exit 1; \
+		fi; \
+		mkdir -p $(RELEASE_DIR); \
+		echo "Using 'cross' for Linux cross-compilation..."; \
+		cross build --release --target $(TARGET_LINUX_X64); \
+		cp target/$(TARGET_LINUX_X64)/release/$(BINARY_NAME) $(BIN_LINUX_X64); \
+		echo "✓ Linux x64 binary: $(BIN_LINUX_X64)"; \
+	fi
 
 # Build Windows x64
 windows:
@@ -101,14 +110,18 @@ github-release: release
 	fi
 	@echo "Checking authentication..."
 	@gh auth status || (echo "✗ Not authenticated. Run: gh auth login" && exit 1)
-	@echo "Creating release v$(VERSION)..."
+	@echo "Collecting available binaries..."
+	@BINARIES=""; \
+	if [ -f "$(BIN_MAC_ARM64)" ]; then BINARIES="$$BINARIES $(BIN_MAC_ARM64)"; fi; \
+	if [ -f "$(BIN_MAC_X64)" ]; then BINARIES="$$BINARIES $(BIN_MAC_X64)"; fi; \
+	if [ -f "$(BIN_LINUX_X64)" ]; then BINARIES="$$BINARIES $(BIN_LINUX_X64)"; fi; \
+	if [ -f "$(BIN_WINDOWS_X64)" ]; then BINARIES="$$BINARIES $(BIN_WINDOWS_X64)"; fi; \
+	echo "Binaries to upload:$$BINARIES"; \
+	echo "Creating release v$(VERSION)..."; \
 	gh release create v$(VERSION) \
 		--title "Roon Remote Display v$(VERSION)" \
-		--notes "Release v$(VERSION) - Roon Remote Display\n\n## Binaries\n- macOS ARM64 (Apple Silicon)\n- macOS x64 (Intel)\n- Linux x64\n- Windows x64\n\n## Installation\nDownload the appropriate binary for your platform and run it." \
-		$(BIN_MAC_ARM64) \
-		$(BIN_MAC_X64) \
-		$(BIN_LINUX_X64) \
-		$(BIN_WINDOWS_X64)
+		--notes "Release v$(VERSION) - Roon Remote Display\n\n## Binaries\n- macOS ARM64 (Apple Silicon)\n- macOS x64 (Intel)\n- Linux x64 (if available)\n- Windows x64\n\n## Installation\nDownload the appropriate binary for your platform and run it." \
+		$$BINARIES
 	@echo "✓ GitHub release v$(VERSION) created successfully!"
 	@echo "  View at: https://github.com/jdrivas/roon-rd/releases/tag/v$(VERSION)"
 
