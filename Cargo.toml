@@ -1,0 +1,31 @@
+[package]
+name = "roon-rd"
+version = "1.0.0"
+edition = "2021"
+authors = ["David <david@momentlabs.io>"]
+
+[dependencies]
+# Roon API from GitHub
+roon-api = { git = "https://github.com/TheAppgineer/rust-roon-api.git", rev = "33516cc", features = ["transport", "image", "browse"] }
+
+# CLI argument parsing
+clap = { version = "4.4", features = ["derive"] }
+
+# Async runtime
+tokio = { version = "1.29", features = ["full"] }
+futures-util = "0.3"
+
+# Web server
+axum = { version = "0.7", features = ["ws"] }
+tower-http = { version = "0.5", features = ["cors"] }
+
+# Serialization
+serde = { version = "1.0", features = ["derive"] }
+serde_json = "1.0"
+
+# Logging
+log = "0.4"
+simplelog = "0.12"
+
+# Interactive readline with history
+rustyline = "14"
