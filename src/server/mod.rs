@@ -102,6 +102,23 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             background: #e74c3c;
             color: #fff;
         }
+        .reconnect-btn {
+            padding: 6px 14px;
+            background: #3498db;
+            color: #fff;
+            border: none;
+            border-radius: 6px;
+            cursor: pointer;
+            font-size: 0.85rem;
+            font-weight: 500;
+            transition: background 0.2s;
+        }
+        .reconnect-btn:hover {
+            background: #2980b9;
+        }
+        .reconnect-btn:active {
+            background: #1f6ca0;
+        }
         .zone-selector {
             display: flex;
             justify-content: space-between;
@@ -468,7 +485,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 <body>
     <div class="container">
         <nav id="zone-selector" class="zone-selector">
-            <div id="connection-status" class="status disconnected">Connecting...</div>
+            <div style="display: flex; align-items: center; gap: 8px;">
+                <div id="connection-status" class="status disconnected">Connecting...</div>
+                <button id="reconnect-btn" class="reconnect-btn" onclick="reconnectToRoon()" style="display: none;">Reconnect to Roon Server</button>
+            </div>
             <div class="zone-dropdown">
                 <select id="zone-select">
                     <option value="all">All Zones</option>
@@ -675,11 +695,13 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
         async function updateStatus() {
             const statusEl = document.getElementById('connection-status');
+            const reconnectBtn = document.getElementById('reconnect-btn');
 
             // Check WebSocket connection first
             if (!wsConnected) {
                 statusEl.className = 'status disconnected';
                 statusEl.textContent = 'Connection Error';
+                reconnectBtn.style.display = 'inline-block';
                 // Don't show auth overlay when server is down - just hide it
                 updateAuthOverlay(true);  // Pass true to hide overlay
                 return;
@@ -693,14 +715,17 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 if (data.connected) {
                     statusEl.className = 'status connected';
                     statusEl.textContent = data.core_name ? `Connected to Roon Server: ${data.core_name}` : 'Connected';
+                    reconnectBtn.style.display = 'none';
                     updateAuthOverlay(true);  // Hide overlay - connected
                 } else {
                     statusEl.className = 'status disconnected';
                     statusEl.textContent = 'Roon Core Not Connected';
+                    reconnectBtn.style.display = 'inline-block';
                     updateAuthOverlay(false);  // Show overlay - need authorization
                 }
             } catch (e) {
                 statusEl.className = 'status disconnected';
+                reconnectBtn.style.display = 'inline-block';
                 statusEl.textContent = 'Connection Error';
                 // Don't show auth overlay for connection errors
                 updateAuthOverlay(true);  // Pass true to hide overlay
@@ -727,6 +752,21 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             } catch (e) {
                 console.error('Error fetching now playing:', e);
             }
+        }
+
+        // Reconnect to Roon Server
+        function reconnectToRoon() {
+            console.log('Reconnecting to Roon Server...');
+            // Close existing WebSocket connection
+            if (ws) {
+                ws.close();
+            }
+            // Clear reconnect timeout
+            if (reconnectTimeout) {
+                clearTimeout(reconnectTimeout);
+            }
+            // Reload the page to re-establish all connections
+            window.location.reload();
         }
 
         // Track mute state for each zone
