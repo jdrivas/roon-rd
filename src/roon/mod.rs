@@ -34,6 +34,7 @@ pub struct RoonClient {
     api: RoonApi,
     zones: Arc<RwLock<HashMap<String, Zone>>>,
     queues: Arc<RwLock<HashMap<String, Vec<QueueItem>>>>, // zone_id -> queue items
+    active_queue_zone: Arc<RwLock<Option<String>>>, // zone_id of currently subscribed queue
     connected: Arc<RwLock<bool>>,
     core_name: Arc<RwLock<Option<String>>>,
     images: Arc<RwLock<HashMap<String, ImageData>>>,
@@ -58,6 +59,7 @@ impl RoonClient {
             api,
             zones: Arc::new(RwLock::new(HashMap::new())),
             queues: Arc::new(RwLock::new(HashMap::new())),
+            active_queue_zone: Arc::new(RwLock::new(None)),
             connected: Arc::new(RwLock::new(false)),
             core_name: Arc::new(RwLock::new(None)),
             images: Arc::new(RwLock::new(HashMap::new())),
@@ -101,6 +103,7 @@ impl RoonClient {
         // Clone Arc references for the handler
         let zones = self.zones.clone();
         let queues = self.queues.clone();
+        let active_queue_zone = self.active_queue_zone.clone();
         let connected = self.connected.clone();
         let core_name = self.core_name.clone();
         let images = self.images.clone();
@@ -219,35 +222,6 @@ impl RoonClient {
                                     }
                                 }
 
-                                // Subscribe to queue for zones with now_playing to check for audio metadata
-                                let transport_svc = transport_service.read().await;
-                                if let Some(transport) = transport_svc.as_ref() {
-                                    let zone_map = zones.read().await;
-                                    // Find first zone with now_playing
-                                    if let Some((zone_id, zone)) = zone_map.iter().find(|(_, z)| z.now_playing.is_some()) {
-                                        log::info!("Subscribing to queue for zone {} to check for audio metadata...", zone.display_name);
-                                        transport.subscribe_queue(zone_id, 10).await;
-
-                                        // Test Strategy 4: Try searching for the currently playing track
-                                        if let Some(now_playing) = &zone.now_playing {
-                                            let browse_svc = browse_service.read().await;
-                                            if let Some(browse) = browse_svc.as_ref() {
-                                                let track_name = &now_playing.two_line.line1;
-                                                log::info!("Testing correlation: Searching for track '{}'...", track_name);
-
-                                                // Try search hierarchy
-                                                let opts = BrowseOpts {
-                                                    pop_all: true,
-                                                    input: Some(track_name.clone()),
-                                                    multi_session_key: Some("search_test".to_string()),
-                                                    ..Default::default()
-                                                };
-                                                browse.browse(&opts).await;
-                                            }
-                                        }
-                                    }
-                                }
-
                                 // Broadcast zone change via WebSocket
                                 let _ = ws_tx.send(WsMessage::ZonesChanged);
                             }
@@ -360,22 +334,55 @@ impl RoonClient {
                             Parsed::Queue(queue_items) => {
                                 log::info!("Queue snapshot - {} items", queue_items.len());
 
-                                // Store queue for the subscribed zone (we only subscribe to one zone at a time)
-                                // Find the zone that has now_playing (the one we subscribed to)
-                                let zone_map = zones.read().await;
-                                if let Some((zone_id, _)) = zone_map.iter().find(|(_, z)| z.now_playing.is_some()) {
+                                // Store queue for the active subscribed zone
+                                let active_zone = active_queue_zone.read().await;
+                                if let Some(zone_id) = active_zone.as_ref() {
+                                    log::info!("Storing queue for active zone: {}", zone_id);
                                     queues.write().await.insert(zone_id.clone(), queue_items);
+                                } else {
+                                    log::warn!("Received queue data but no active queue zone subscription");
                                 }
                             }
                             Parsed::QueueChanges(queue_changes) => {
                                 log::info!("Queue changes - {} operations", queue_changes.len());
-                                for change in queue_changes {
-                                    log::info!("  Operation: {:?} at index {}", change.operation, change.index);
-                                    if let Some(items) = &change.items {
-                                        for item in items {
-                                            log::info!("    Item: {} (id: {})", item.two_line.line1, item.queue_item_id);
+
+                                // Apply changes to the active zone's queue
+                                let active_zone = active_queue_zone.read().await;
+                                if let Some(zone_id) = active_zone.as_ref() {
+                                    let mut queues_map = queues.write().await;
+                                    if let Some(queue) = queues_map.get_mut(zone_id) {
+                                        for change in queue_changes {
+                                            log::info!("  Operation: {:?} at index {}", change.operation, change.index);
+
+                                            match change.operation {
+                                                roon_api::transport::QueueOperation::Insert => {
+                                                    if let Some(items) = &change.items {
+                                                        let idx = change.index;
+                                                        for (i, item) in items.iter().enumerate() {
+                                                            log::info!("    Inserting: {} (id: {})", item.two_line.line1, item.queue_item_id);
+                                                            // Items from queue changes are already QueueItem
+                                                            queue.insert(idx + i, item.clone());
+                                                        }
+                                                    }
+                                                }
+                                                roon_api::transport::QueueOperation::Remove => {
+                                                    let count = change.count.unwrap_or(1);
+                                                    let idx = change.index;
+                                                    log::info!("    Removing {} items at index {}", count, idx);
+                                                    for _ in 0..count {
+                                                        if idx < queue.len() {
+                                                            queue.remove(idx);
+                                                        }
+                                                    }
+                                                }
+                                            }
                                         }
+                                        log::info!("Queue updated for zone {} - now has {} items", zone_id, queue.len());
+                                    } else {
+                                        log::warn!("Received queue changes for zone {} but no queue cached", zone_id);
                                     }
+                                } else {
+                                    log::warn!("Received queue changes but no active queue zone subscription");
                                 }
                             }
                             Parsed::Error(err) => {
@@ -418,6 +425,37 @@ impl RoonClient {
     /// Get queue for a specific zone
     pub async fn get_queue(&self, zone_id: &str) -> Option<Vec<QueueItem>> {
         self.queues.read().await.get(zone_id).cloned()
+    }
+
+    /// Subscribe to queue updates for a specific zone
+    /// Unsubscribes from any previously active queue subscription first
+    pub async fn subscribe_to_queue(&self, zone_id: &str) {
+        let transport_svc = self.transport_service.read().await;
+        if let Some(transport) = transport_svc.as_ref() {
+            // Check if we're already subscribed to this zone
+            let current_zone = self.active_queue_zone.read().await;
+            if current_zone.as_deref() == Some(zone_id) {
+                log::debug!("Already subscribed to queue for zone {}", zone_id);
+                return;
+            }
+            drop(current_zone);
+
+            // Unsubscribe from previous queue if any
+            let mut active_zone = self.active_queue_zone.write().await;
+            if active_zone.is_some() {
+                log::info!("Unsubscribing from previous queue...");
+                transport.unsubscribe_queue().await;
+            }
+
+            // Subscribe to new queue
+            log::info!("Subscribing to queue for zone {}...", zone_id);
+            transport.subscribe_queue(zone_id, 50).await;
+
+            // Update active zone tracking
+            *active_zone = Some(zone_id.to_string());
+        } else {
+            log::warn!("Transport service not available for queue subscription");
+        }
     }
 
     /// Request an image from Roon

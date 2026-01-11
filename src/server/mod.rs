@@ -1589,6 +1589,9 @@ async fn queue_handler(
 ) -> Json<QueueResponse> {
     let client = state.roon_client.lock().await;
 
+    // Subscribe to this zone's queue (will unsubscribe from previous zone if any)
+    client.subscribe_to_queue(&zone_id).await;
+
     let queue_items = client.get_queue(&zone_id).await.unwrap_or_default();
 
     let items: Vec<QueueItemInfo> = queue_items.into_iter().map(|item| {
