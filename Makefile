@@ -40,7 +40,7 @@ help:
 	@echo "  make help            - Show this help message"
 
 # Build all releases
-release: mac windows
+release: mac linux windows
 	@echo "✓ All releases built successfully in $(RELEASE_DIR)/"
 	@ls -lh $(RELEASE_DIR)/
 
@@ -104,9 +104,10 @@ github-release: release
 	@echo "Creating release v$(VERSION)..."
 	gh release create v$(VERSION) \
 		--title "Roon Remote Display v$(VERSION)" \
-		--notes "Release v$(VERSION) - Roon Remote Display\n\n## Binaries\n- macOS ARM64 (Apple Silicon)\n- macOS x64 (Intel)\n- Windows x64\n\n## Installation\nDownload the appropriate binary for your platform and run it." \
+		--notes "Release v$(VERSION) - Roon Remote Display\n\n## Binaries\n- macOS ARM64 (Apple Silicon)\n- macOS x64 (Intel)\n- Linux x64\n- Windows x64\n\n## Installation\nDownload the appropriate binary for your platform and run it." \
 		$(BIN_MAC_ARM64) \
 		$(BIN_MAC_X64) \
+		$(BIN_LINUX_X64) \
 		$(BIN_WINDOWS_X64)
 	@echo "✓ GitHub release v$(VERSION) created successfully!"
 	@echo "  View at: https://github.com/jdrivas/roon-rd/releases/tag/v$(VERSION)"
