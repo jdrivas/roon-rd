@@ -77,12 +77,20 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             padding: 0;
             box-sizing: border-box;
         }
+        /* Hide scrollbars */
+        html, body {
+            overflow: hidden;
+            scrollbar-width: none; /* Firefox */
+            -ms-overflow-style: none; /* IE and Edge */
+        }
+        html::-webkit-scrollbar, body::-webkit-scrollbar {
+            display: none; /* Chrome, Safari, Opera */
+        }
         body {
             font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Oxygen, Ubuntu, sans-serif;
             background: linear-gradient(135deg, #1a1a2e 0%, #16213e 100%);
             color: #eee;
             height: 100vh;
-            overflow: auto;
             margin: 0;
             padding: 0;
         }
@@ -196,6 +204,13 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .zone-dropdown select option {
             background: #1a1a2e;
             color: #fff;
+        }
+        .zone-dropdown select option.version {
+            font-size: 0.75rem;
+            color: #888;
+            font-style: italic;
+            margin-top: 1.2em;
+            padding-top: 0.5em;
         }
         .zone {
             background: rgba(255, 255, 255, 0.05);
@@ -832,6 +847,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             for (const zone of sortedZones) {
                 html += `<option value="${zone.zone_id}">${zone.display_name}</option>`;
             }
+            // Add version
+            html += '<option disabled class="version">v1.3.0</option>';
             zoneSelect.innerHTML = html;
 
             // Set selected value
