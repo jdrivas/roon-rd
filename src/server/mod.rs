@@ -273,6 +273,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             height: calc(100vh - 200px);
             max-height: 50vw;
             min-height: 200px;
+            position: relative;
         }
         .track-info {
             margin-bottom: 15px;
@@ -437,7 +438,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
         .queue-overlay {
             position: absolute;
-            width: 66.666%;
+            width: 100%;
             height: 100%;
             top: 0;
             left: 0;
@@ -848,7 +849,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 html += `<option value="${zone.zone_id}">${zone.display_name}</option>`;
             }
             // Add version
-            html += '<option disabled class="version">v1.3.1</option>';
+            html += '<option disabled class="version">v1.3.2</option>';
             zoneSelect.innerHTML = html;
 
             // Set selected value
@@ -1287,7 +1288,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     </div>
                 `;
 
-                zoneElement.insertAdjacentHTML('beforeend', overlayHtml);
+                // Insert overlay into track-details instead of zone
+                const trackDetails = zoneElement.querySelector('.track-details');
+                if (trackDetails) {
+                    trackDetails.insertAdjacentHTML('beforeend', overlayHtml);
+                }
             } catch (e) {
                 console.error('Error loading queue:', e);
             }
