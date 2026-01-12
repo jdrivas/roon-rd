@@ -214,34 +214,6 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             height: auto;
             min-height: auto;
         }
-        .zone-header {
-            display: flex;
-            justify-content: flex-end;
-            align-items: center;
-            margin-bottom: 15px;
-        }
-        .zone-name {
-            font-size: 1.2rem;
-            font-weight: 500;
-        }
-        .zone-state {
-            padding: 4px 10px;
-            border-radius: 8px;
-            font-size: 0.8rem;
-            text-transform: lowercase;
-        }
-        .zone-state.playing {
-            background: #2ecc71;
-            color: #000;
-        }
-        .zone-state.paused {
-            background: #f39c12;
-            color: #000;
-        }
-        .zone-state.stopped {
-            background: #555;
-            color: #fff;
-        }
         .zone-content {
             display: flex;
             gap: 20px;
@@ -399,6 +371,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .control-btn:active {
             transform: scale(0.95);
         }
+        .control-btn.pause-active {
+            color: #4ade80;  /* Green color indicating active playback */
+        }
+        .control-btn.pause-active:hover {
+            color: #86efac;  /* Lighter green on hover */
+        }
         .progress-bar {
             height: 4px;
             background: #333;
@@ -527,6 +505,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
         /* Large screen mode - for fullscreen on big monitors */
         @media (min-width: 1500px) {
+            .zone-name-label {
+                font-size: 1.3rem;
+            }
             .track-title {
                 font-size: 1.8rem;
             }
@@ -678,10 +659,6 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             if (zone.state.toLowerCase() === 'stopped') {
                 return `
                     <div class="zone stopped" data-zone-id="${zone.zone_id}">
-                        <div class="zone-header">
-                            <span class="zone-name">${zone.zone_name}</span>
-                            <span class="zone-state ${stateClass}">stopped</span>
-                        </div>
                         <div class="zone-controls">
                             <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'play')">▶ Play</button>
                         </div>
@@ -701,14 +678,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
             const isPlaying = zone.state.toLowerCase() === 'playing';
             const playPauseBtn = isPlaying
-                ? `<button class="control-btn" onclick="sendControl('${zone.zone_id}', 'pause')">⏸ Pause</button>`
-                : `<button class="control-btn" onclick="sendControl('${zone.zone_id}', 'play')">▶ Play</button>`;
+                ? `<button class="control-btn play-pause-btn pause-active" onclick="sendControl('${zone.zone_id}', 'pause')">⏸ Pause</button>`
+                : `<button class="control-btn play-pause-btn" onclick="sendControl('${zone.zone_id}', 'play')">▶ Play</button>`;
 
             return `
                 <div class="zone" data-zone-id="${zone.zone_id}">
-                    <div class="zone-header">
-                        <span class="zone-state ${stateClass}">${zone.state.toLowerCase()}</span>
-                    </div>
                     ${zone.track ? `
                         <div class="zone-content">
                             ${albumArt}
@@ -758,16 +732,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         function updateZoneElement(element, zone) {
             const stateClass = zone.state.toLowerCase();
 
-            // Update zone header and zone name label
-            const zoneName = element.querySelector('.zone-name');
+            // Update zone name label
             const zoneNameLabel = element.querySelector('.zone-name-label');
-            const zoneState = element.querySelector('.zone-state');
-            if (zoneName) zoneName.textContent = zone.zone_name;
             if (zoneNameLabel) zoneNameLabel.innerHTML = zone.zone_name + getZoneIcon(zone.zone_name, zone.devices);
-            if (zoneState) {
-                zoneState.textContent = zone.state.toLowerCase();
-                zoneState.className = `zone-state ${stateClass}`;
-            }
 
             // Update class on zone element
             element.className = zone.state.toLowerCase() === 'stopped' ? 'zone stopped' : 'zone';
@@ -839,14 +806,16 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
                 // Update play/pause button
                 const isPlaying = zone.state.toLowerCase() === 'playing';
-                const playPauseBtn = element.querySelector('.zone-controls button:nth-child(3)');
+                const playPauseBtn = element.querySelector('.play-pause-btn');
                 if (playPauseBtn) {
                     if (isPlaying) {
                         playPauseBtn.innerHTML = '⏸ Pause';
                         playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'pause')`);
+                        playPauseBtn.classList.add('pause-active');
                     } else {
                         playPauseBtn.innerHTML = '▶ Play';
                         playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'play')`);
+                        playPauseBtn.classList.remove('pause-active');
                     }
                 }
             }
@@ -1485,7 +1454,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
-    println!("\n=== Roon Remote Display Server ===");
+    println!("\n=== Roon Remote Display Server v{} ===", env!("CARGO_PKG_VERSION"));
     println!("Starting server on http://{}", addr);
     println!("\nOpen http://localhost:{} in your browser", port);
     println!("\nAPI endpoints:");
