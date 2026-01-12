@@ -921,6 +921,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             }
 
             // DOM manipulation approach - update existing elements or create new ones
+            // Remove loading element if it exists
+            const loadingElement = container.querySelector('.loading');
+            if (loadingElement) {
+                loadingElement.remove();
+            }
+
             // Get current zone elements
             const existingZones = new Map();
             container.querySelectorAll('.zone').forEach(el => {
