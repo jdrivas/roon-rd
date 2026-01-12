@@ -22,11 +22,11 @@ struct Cli {
 
 #[derive(Subcommand)]
 enum Commands {
-    /// Query Roon for information
+    /// Query Roon for information or control playback
     Query {
-        /// Type of query: status, zones, now-playing
-        #[arg(value_name = "TYPE")]
-        query_type: String,
+        /// Command and arguments: status, zones, now-playing, play <zone_id>, pause <zone_id>, stop <zone_id>
+        #[arg(value_name = "COMMAND", num_args = 1..)]
+        args: Vec<String>,
     },
     /// Start web server mode
     Server {
@@ -82,8 +82,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     // Handle commands
     match cli.command {
-        Commands::Query { query_type } => {
-            cli::handle_query(client, &query_type).await?;
+        Commands::Query { args } => {
+            let query_string = args.join(" ");
+            cli::handle_query(client, &query_string).await?;
         }
         Commands::Server { port } => {
             server::start_server(client, port).await?;

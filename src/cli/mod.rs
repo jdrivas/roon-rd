@@ -49,6 +49,7 @@ async fn execute_query(client: &RoonClient, query_type: &str) -> Result<(), Stri
                     // Zone name with state
                     let state_str = format!("{:?}", zone.state).to_lowercase();
                     println!("  {} ({})", zone.display_name, state_str);
+                    println!("    ID: {}", zone.zone_id);
 
                     // Show outputs (devices in this zone) indented
                     for output in &zone.outputs {
@@ -127,17 +128,44 @@ async fn execute_query(client: &RoonClient, query_type: &str) -> Result<(), Stri
         "help" => {
             println!();
             println!("  Available commands:");
-            println!("    status      - Show connection status");
-            println!("    zones       - List available zones");
-            println!("    now-playing - Show currently playing tracks");
-            println!("    help        - Show this help message");
-            println!("    quit        - Exit interactive mode");
+            println!("    status             - Show connection status");
+            println!("    zones              - List available zones");
+            println!("    now-playing        - Show currently playing tracks");
+            println!("    play <zone_id>     - Start playback in zone");
+            println!("    pause <zone_id>    - Pause playback in zone");
+            println!("    stop <zone_id>     - Stop playback in zone");
+            println!("    help               - Show this help message");
+            println!("    quit               - Exit interactive mode");
             println!();
             Ok(())
         }
         "" => Ok(()),
         _ => {
-            Err(format!("Unknown command: {}\nType 'help' for available commands.", query_type))
+            // Check if it's a control command with zone_id
+            let parts: Vec<&str> = query_type.split_whitespace().collect();
+            if parts.len() == 2 {
+                let command = parts[0];
+                let zone_id = parts[1];
+
+                match command {
+                    "play" | "pause" | "stop" => {
+                        match client.control_zone(zone_id, command).await {
+                            Ok(_) => {
+                                println!();
+                                println!("  {} command sent to zone", command);
+                                println!();
+                                Ok(())
+                            }
+                            Err(e) => Err(format!("Control failed: {}", e))
+                        }
+                    }
+                    _ => Err(format!("Unknown command: {}\nType 'help' for available commands.", query_type))
+                }
+            } else if parts.len() == 1 && (parts[0] == "play" || parts[0] == "pause" || parts[0] == "stop") {
+                Err(format!("Usage: {} <zone_id>\nUse 'zones' to see available zone IDs.", parts[0]))
+            } else {
+                Err(format!("Unknown command: {}\nType 'help' for available commands.", query_type))
+            }
         }
     }
 }
