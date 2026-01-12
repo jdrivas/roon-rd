@@ -848,7 +848,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 html += `<option value="${zone.zone_id}">${zone.display_name}</option>`;
             }
             // Add version
-            html += '<option disabled class="version">v1.3.0</option>';
+            html += '<option disabled class="version">v1.3.1</option>';
             zoneSelect.innerHTML = html;
 
             // Set selected value
