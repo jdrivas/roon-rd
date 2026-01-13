@@ -380,6 +380,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             white-space: nowrap;
             flex-shrink: 0;
         }
+        .control-btn svg {
+            width: 1.5em;
+            height: 1.5em;
+            flex-shrink: 0;
+        }
         .control-btn:hover {
             background: rgba(255, 255, 255, 0.2);
             border-color: rgba(255, 255, 255, 0.3);
@@ -543,10 +548,6 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 font-size: 1.3rem;
                 padding: 12px 18px;
             }
-            .control-btn svg {
-                width: 20px;
-                height: 20px;
-            }
             .progress-time {
                 font-size: 1.1rem;
             }
@@ -704,8 +705,17 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
             const isPlaying = zone.state.toLowerCase() === 'playing';
             const playPauseBtn = isPlaying
-                ? `<button class="control-btn play-pause-btn pause-active" onclick="sendControl('${zone.zone_id}', 'pause')">⏸ Pause</button>`
-                : `<button class="control-btn play-pause-btn" onclick="sendControl('${zone.zone_id}', 'play')">▶ Play</button>`;
+                ? `<button class="control-btn play-pause-btn pause-active" onclick="sendControl('${zone.zone_id}', 'pause')">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <rect x="5" y="3" width="2" height="10"/>
+                        <rect x="9" y="3" width="2" height="10"/>
+                    </svg>
+                </button>`
+                : `<button class="control-btn play-pause-btn" onclick="sendControl('${zone.zone_id}', 'play')">
+                    <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                        <path d="M5 3l8 5-8 5V3z"/>
+                    </svg>
+                </button>`;
 
             return `
                 <div class="zone" data-zone-id="${zone.zone_id}">
@@ -732,16 +742,37 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                 <div class="zone-controls-container">
                                     <div class="zone-name-label">${zone.zone_name}${getZoneIcon(zone.zone_name, zone.devices)}</div>
                                     <div class="zone-controls">
-                                        <button class="control-btn" onclick="showQueue('${zone.zone_id}')">▹≡</button>
+                                        <button class="control-btn" onclick="showQueue('${zone.zone_id}')">
+                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                                <rect x="2" y="3" width="12" height="10" rx="1"/>
+                                                <line x1="5" y1="6" x2="11" y2="6"/>
+                                                <line x1="5" y1="9" x2="11" y2="9"/>
+                                            </svg>
+                                        </button>
                                         <div style="width: 8px;"></div>
-                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'previous')">⏮</button>
+                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'previous')">
+                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M11 3L5 8l6 5V3z"/>
+                                                <line x1="4" y1="3" x2="4" y2="13"/>
+                                            </svg>
+                                        </button>
                                         ${playPauseBtn}
-                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">⏹ Stop</button>
-                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">⏭</button>
+                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">
+                                            <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                                                <rect x="4" y="4" width="8" height="8" rx="1"/>
+                                            </svg>
+                                        </button>
+                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">
+                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M5 3l6 5-6 5V3z"/>
+                                                <line x1="12" y1="3" x2="12" y2="13"/>
+                                            </svg>
+                                        </button>
                                         <button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">
-                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                                 <path d="M8 3L5 6H2v4h3l3 3V3z"/>
                                                 <path d="M11 7c.5.5.5 2 0 2.5"/>
+                                                <path d="M13 5c1 1.5 1 5 0 6.5"/>
                                             </svg>
                                         </button>
                                     </div>
@@ -841,11 +872,18 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const playPauseBtn = element.querySelector('.play-pause-btn');
                 if (playPauseBtn) {
                     if (isPlaying) {
-                        playPauseBtn.innerHTML = '⏸ Pause';
+                        playPauseBtn.innerHTML = `
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <rect x="5" y="3" width="2" height="10"/>
+                                <rect x="9" y="3" width="2" height="10"/>
+                            </svg>`;
                         playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'pause')`);
                         playPauseBtn.classList.add('pause-active');
                     } else {
-                        playPauseBtn.innerHTML = '▶ Play';
+                        playPauseBtn.innerHTML = `
+                            <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
+                                <path d="M5 3l8 5-8 5V3z"/>
+                            </svg>`;
                         playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'play')`);
                         playPauseBtn.classList.remove('pause-active');
                     }
@@ -1233,7 +1271,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             muteBtn.classList.add('muted');
                             // Muted icon with X
                             muteBtn.innerHTML = `
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M8 3L5 6H2v4h3l3 3V3z"/>
                                     <line x1="11" y1="6" x2="14" y2="9"/>
                                     <line x1="14" y1="6" x2="11" y2="9"/>
@@ -1242,9 +1280,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             muteBtn.classList.remove('muted');
                             // Unmuted icon with sound waves
                             muteBtn.innerHTML = `
-                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M8 3L5 6H2v4h3l3 3V3z"/>
                                     <path d="M11 7c.5.5.5 2 0 2.5"/>
+                                    <path d="M13 5c1 1.5 1 5 0 6.5"/>
                                 </svg>`;
                         }
                     }
