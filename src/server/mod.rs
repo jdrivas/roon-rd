@@ -394,10 +394,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             color: #86efac;  /* Lighter green on hover */
         }
         .control-btn.muted {
-            color: #f87171;  /* Red color indicating muted */
+            color: #dc2626;  /* Bright red color indicating muted */
         }
         .control-btn.muted:hover {
-            color: #fca5a5;  /* Lighter red on hover */
+            color: #ef4444;  /* Lighter red on hover */
         }
         .progress-bar {
             height: 4px;
@@ -542,6 +542,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             .control-btn {
                 font-size: 1.3rem;
                 padding: 12px 18px;
+            }
+            .control-btn svg {
+                width: 20px;
+                height: 20px;
             }
             .progress-time {
                 font-size: 1.1rem;
@@ -734,7 +738,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         ${playPauseBtn}
                                         <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">⏹ Stop</button>
                                         <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">⏭</button>
-                                        <button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">🔊 Mute</button>
+                                        <button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">
+                                            <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                                <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                                                <path d="M11 7c.5.5.5 2 0 2.5"/>
+                                            </svg>
+                                        </button>
                                     </div>
                                 </div>
                             </div>
@@ -1222,10 +1231,21 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     if (muteBtn) {
                         if (newMuteState) {
                             muteBtn.classList.add('muted');
-                            muteBtn.textContent = '🔇 Unmute';
+                            // Muted icon with X
+                            muteBtn.innerHTML = `
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                                    <line x1="11" y1="6" x2="14" y2="9"/>
+                                    <line x1="14" y1="6" x2="11" y2="9"/>
+                                </svg>`;
                         } else {
                             muteBtn.classList.remove('muted');
-                            muteBtn.textContent = '🔊 Mute';
+                            // Unmuted icon with sound waves
+                            muteBtn.innerHTML = `
+                                <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                    <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                                    <path d="M11 7c.5.5.5 2 0 2.5"/>
+                                </svg>`;
                         }
                     }
                 } else {
