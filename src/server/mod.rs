@@ -393,6 +393,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .control-btn.pause-active:hover {
             color: #86efac;  /* Lighter green on hover */
         }
+        .control-btn.muted {
+            color: #f87171;  /* Red color indicating muted */
+        }
+        .control-btn.muted:hover {
+            color: #fca5a5;  /* Lighter red on hover */
+        }
         .progress-bar {
             height: 4px;
             background: #333;
@@ -728,6 +734,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         ${playPauseBtn}
                                         <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">⏹ Stop</button>
                                         <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">⏭</button>
+                                        <button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">🔊 Mute</button>
                                     </div>
                                 </div>
                             </div>
@@ -1215,10 +1222,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     if (muteBtn) {
                         if (newMuteState) {
                             muteBtn.classList.add('muted');
-                            muteBtn.textContent = '🔊 Unmute';
+                            muteBtn.textContent = '🔇 Unmute';
                         } else {
                             muteBtn.classList.remove('muted');
-                            muteBtn.textContent = '🔇 Mute';
+                            muteBtn.textContent = '🔊 Mute';
                         }
                     }
                 } else {

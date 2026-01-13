@@ -134,6 +134,7 @@ async fn execute_query(client: &RoonClient, query_type: &str) -> Result<(), Stri
             println!("    play <zone_id>     - Start playback in zone");
             println!("    pause <zone_id>    - Pause playback in zone");
             println!("    stop <zone_id>     - Stop playback in zone");
+            println!("    mute <zone_id>     - Toggle mute for zone");
             println!("    help               - Show this help message");
             println!("    quit               - Exit interactive mode");
             println!();
@@ -159,9 +160,21 @@ async fn execute_query(client: &RoonClient, query_type: &str) -> Result<(), Stri
                             Err(e) => Err(format!("Control failed: {}", e))
                         }
                     }
+                    "mute" => {
+                        // Toggle mute - we'll use true to mute (server handler will toggle)
+                        match client.mute_output(zone_id, true).await {
+                            Ok(_) => {
+                                println!();
+                                println!("  Mute toggled for zone");
+                                println!();
+                                Ok(())
+                            }
+                            Err(e) => Err(format!("Mute failed: {}", e))
+                        }
+                    }
                     _ => Err(format!("Unknown command: {}\nType 'help' for available commands.", query_type))
                 }
-            } else if parts.len() == 1 && (parts[0] == "play" || parts[0] == "pause" || parts[0] == "stop") {
+            } else if parts.len() == 1 && (parts[0] == "play" || parts[0] == "pause" || parts[0] == "stop" || parts[0] == "mute") {
                 Err(format!("Usage: {} <zone_id>\nUse 'zones' to see available zone IDs.", parts[0]))
             } else {
                 Err(format!("Unknown command: {}\nType 'help' for available commands.", query_type))

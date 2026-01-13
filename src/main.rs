@@ -24,7 +24,7 @@ struct Cli {
 enum Commands {
     /// Query Roon for information or control playback
     Query {
-        /// Command and arguments: status, zones, now-playing, play <zone_id>, pause <zone_id>, stop <zone_id>
+        /// Command and arguments: status, zones, now-playing, play <zone_id>, pause <zone_id>, stop <zone_id>, mute <zone_id>
         #[arg(value_name = "COMMAND", num_args = 1..)]
         args: Vec<String>,
     },
