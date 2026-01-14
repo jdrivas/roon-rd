@@ -771,8 +771,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         <button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">
                                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                                 <path d="M8 3L5 6H2v4h3l3 3V3z"/>
-                                                <path d="M11 7c.5.5.5 2 0 2.5"/>
-                                                <path d="M13 5c1 1.5 1 5 0 6.5"/>
+                                                <path d="M11 6.5c.43 1.1.43 2.3 0 3.4"/>
+                                                <path d="M13.5 4.5c1 2 1 5.5 0 7.5"/>
                                             </svg>
                                         </button>
                                     </div>
@@ -1282,8 +1282,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             muteBtn.innerHTML = `
                                 <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                     <path d="M8 3L5 6H2v4h3l3 3V3z"/>
-                                    <path d="M11 7c.5.5.5 2 0 2.5"/>
-                                    <path d="M13 5c1 1.5 1 5 0 6.5"/>
+                                    <path d="M11 6.5c.43 1.1.43 2.3 0 3.4"/>
+                                    <path d="M13.5 4.5c1 2 1 5.5 0 7.5"/>
                                 </svg>`;
                         }
                     }
