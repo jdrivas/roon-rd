@@ -272,7 +272,7 @@ roon-rd/
 │   ├── server/          # Web server, API, and SPA
 │   │   └── mod.rs       # HTTP handlers, WebSocket, embedded HTML/CSS/JS
 │   └── roon/            # Roon API client wrapper
-│       └── mod.rs       # Roon protocol implementation
+│       └── mod.rs       # Wrapper for roon-api crate with state management
 ├── Cargo.toml           # Dependencies and project metadata
 ├── Makefile             # Build automation for multi-platform releases
 └── README.md
@@ -305,10 +305,11 @@ make install-targets
 ### Architecture
 
 1. **Roon API Client** (`src/roon/mod.rs`)
+   - Wrapper around the Roon API for control and metadata
    - Connects to Roon Core via network discovery
-   - Implements Roon's RAAT protocol
    - Manages authentication and service subscriptions
-   - Maintains persistent WebSocket connection
+   - Handles transport control, image fetching, and browsing
+   - Maintains persistent connection to Roon Core
 
 2. **CLI Modes** (`src/cli/mod.rs`)
    - **Query Mode**: One-shot queries with immediate exit
@@ -332,12 +333,17 @@ make install-targets
 ### Data Flow
 
 ```
-Roon Core <--RAAT--> Roon Client <---> CLI/Server
-                                          │
-                                          ├─> REST API
-                                          ├─> WebSocket
-                                          └─> SPA (HTML/CSS/JS)
+Roon Core <--Roon API--> Roon Client <---> CLI/Server
+                                              │
+                                              ├─> REST API
+                                              ├─> WebSocket
+                                              └─> SPA (HTML/CSS/JS)
 ```
+
+Note: This application uses the Roon API for control and metadata, not RAAT.
+RAAT (Roon Advanced Audio Transport) is Roon's proprietary audio streaming
+protocol used between Roon Core and audio endpoints. This application controls
+playback but does not handle audio transport.
 
 ### Zone Updates
 
