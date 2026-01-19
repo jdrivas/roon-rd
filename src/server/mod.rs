@@ -937,6 +937,29 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         }
                     }
                 }
+
+                // Update mute button based on zone.is_muted
+                const muteBtn = element.querySelector(`#mute-${zone.zone_id}`);
+                if (muteBtn) {
+                    const isMuted = zone.is_muted === true;
+                    if (isMuted) {
+                        muteBtn.classList.add('muted');
+                        muteBtn.innerHTML = `
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                                <line x1="11" y1="6" x2="14" y2="9"/>
+                                <line x1="14" y1="6" x2="11" y2="9"/>
+                            </svg>`;
+                    } else {
+                        muteBtn.classList.remove('muted');
+                        muteBtn.innerHTML = `
+                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                                <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                                <path d="M11 6.5c.43 1.1.43 2.3 0 3.4"/>
+                                <path d="M13.5 4.5c1 2 1 5.5 0 7.5"/>
+                            </svg>`;
+                    }
+                }
             }
         }
 
