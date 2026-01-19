@@ -46,10 +46,41 @@ pub struct RoonClient {
 
 const CONFIG_PATH: &str = "roon-rd-config.json";
 
+/// Get the local IP address of this machine
+fn get_local_ip() -> String {
+    use std::net::UdpSocket;
+
+    // Connect to a public DNS server (doesn't actually send data)
+    // This is the most reliable way to get the local IP that would be used for network communication
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if let Ok(()) = socket.connect("8.8.8.8:80") {
+            if let Ok(addr) = socket.local_addr() {
+                return addr.ip().to_string();
+            }
+        }
+    }
+
+    // Fallback to localhost if we can't determine the IP
+    "localhost".to_string()
+}
+
 impl RoonClient {
     /// Create a new Roon client
     pub fn new() -> Result<Self, Box<dyn std::error::Error>> {
-        let info = info!("com.momentlabs.io", "Roon Remote Display");
+        // Get local IP address for display name
+        let local_ip = get_local_ip();
+        let display_name = format!("Roon Remote Display @ {}", local_ip);
+
+        // Construct Info manually instead of using the macro
+        let extension_id = format!("com.momentlabs.io.{}", env!("CARGO_PKG_NAME"));
+        let info = Info::new(
+            extension_id,
+            Box::leak(display_name.into_boxed_str()), // Convert to &'static str
+            env!("CARGO_PKG_VERSION"),
+            Some("Momentlabs"),
+            "david@momentlabs.io",
+            Some(env!("CARGO_PKG_REPOSITORY"))
+        );
         let api = RoonApi::new(info);
 
         // Create broadcast channel for WebSocket updates (capacity of 100 messages)
