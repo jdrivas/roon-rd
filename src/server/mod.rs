@@ -50,6 +50,7 @@ pub struct NowPlayingInfo {
     pub position_seconds: Option<i64>,
     pub length_seconds: Option<u32>,
     pub image_key: Option<String>,
+    pub is_muted: Option<bool>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -323,7 +324,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
-            padding: 40px;
+            padding: 10px;
             font-size: 1.5rem;
         }
         .stopped-zone-info {
@@ -710,18 +711,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         function renderZone(zone) {
             const stateClass = zone.state.toLowerCase();
 
-            // For stopped zones, only show the header with status and controls
-            if (zone.state.toLowerCase() === 'stopped') {
-                return `
-                    <div class="zone stopped" data-zone-id="${zone.zone_id}">
-                        <div class="zone-controls">
-                            <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'play')">▶ Play</button>
-                        </div>
-                    </div>
-                `;
-            }
-
-            // For playing/paused zones, show full details
+            // Calculate progress and album art
             const progress = zone.length_seconds > 0
                 ? ((zone.position_seconds || 0) / zone.length_seconds * 100)
                 : 0;
@@ -749,11 +739,27 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     </svg>
                 </button>`;
 
-            const isStopped = state === 'stopped';
+            // Render mute button based on server state
+            const isMuted = zone.is_muted === true;
+            const muteBtn = isMuted
+                ? `<button class="control-btn muted" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                        <line x1="11" y1="6" x2="14" y2="9"/>
+                        <line x1="14" y1="6" x2="11" y2="9"/>
+                    </svg>
+                </button>`
+                : `<button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">
+                    <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+                        <path d="M8 3L5 6H2v4h3l3 3V3z"/>
+                        <path d="M11 6.5c.43 1.1.43 2.3 0 3.4"/>
+                        <path d="M13.5 4.5c1 2 1 5.5 0 7.5"/>
+                    </svg>
+                </button>`;
 
             return `
-                <div class="zone" data-zone-id="${zone.zone_id}">
-                    ${!isStopped && zone.track ? `
+                <div class="zone${isStopped ? ' stopped' : ''}" data-zone-id="${zone.zone_id}">
+                    ${(!isStopped && zone.track) ? `
                         <div class="zone-content">
                             ${albumArt}
                             <div class="track-details">
@@ -797,13 +803,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                                 <line x1="12" y1="3" x2="12" y2="13"/>
                                             </svg>
                                         </button>
-                                        <button class="control-btn" id="mute-${zone.zone_id}" onclick="toggleMute('${zone.zone_id}')">
-                                            <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
-                                                <path d="M8 3L5 6H2v4h3l3 3V3z"/>
-                                                <path d="M11 6.5c.43 1.1.43 2.3 0 3.4"/>
-                                                <path d="M13.5 4.5c1 2 1 5.5 0 7.5"/>
-                                            </svg>
-                                        </button>
+                                        ${muteBtn}
                                     </div>
                                 </div>
                             </div>
@@ -1301,7 +1301,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
 
         async function toggleMute(zoneId) {
-            const isMuted = muteState[zoneId] || false;
+            // Get current mute state from zone data
+            const zoneData = nowPlayingZones.find(z => z.zone_id === zoneId);
+            const isMuted = zoneData?.is_muted || false;
             const newMuteState = !isMuted;
 
             try {
@@ -1311,7 +1313,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     body: JSON.stringify({ mute: newMuteState })
                 });
                 if (response.ok) {
-                    muteState[zoneId] = newMuteState;
+                    // Update local zone data immediately for responsiveness
+                    if (zoneData) {
+                        zoneData.is_muted = newMuteState;
+                    }
+
+                    // Update the mute button to reflect new state
                     const muteBtn = document.getElementById(`mute-${zoneId}`);
                     if (muteBtn) {
                         if (newMuteState) {
@@ -1731,39 +1738,46 @@ async fn now_playing_handler(State(state): State<AppState>) -> Json<NowPlayingRe
 
     let zones = client.get_zones().await;
     let now_playing: Vec<NowPlayingInfo> = zones.into_iter()
-        .filter_map(|zone| {
-            // Only include zones that have something playing or paused
-            if zone.now_playing.is_some() {
-                let now_playing = zone.now_playing.as_ref()?;
+        .map(|zone| {
+            // Extract track info if available
+            let (track, artist, album, position_seconds, length_seconds, image_key) =
+                if let Some(now_playing) = zone.now_playing.as_ref() {
+                    let three_line = &now_playing.three_line;
+                    (
+                        Some(three_line.line1.clone()),
+                        if !three_line.line2.is_empty() {
+                            Some(three_line.line2.clone())
+                        } else {
+                            None
+                        },
+                        if !three_line.line3.is_empty() {
+                            Some(three_line.line3.clone())
+                        } else {
+                            None
+                        },
+                        now_playing.seek_position,
+                        now_playing.length,
+                        now_playing.image_key.clone(),
+                    )
+                } else {
+                    (None, None, None, None, None, None)
+                };
 
-                let three_line = &now_playing.three_line;
-                let (track, artist, album) = (
-                    Some(three_line.line1.clone()),
-                    if !three_line.line2.is_empty() {
-                        Some(three_line.line2.clone())
-                    } else {
-                        None
-                    },
-                    if !three_line.line3.is_empty() {
-                        Some(three_line.line3.clone())
-                    } else {
-                        None
-                    },
-                );
+            // Extract is_muted from the first output with volume info
+            let is_muted = zone.outputs.iter()
+                .find_map(|output| output.volume.as_ref().and_then(|v| v.is_muted));
 
-                Some(NowPlayingInfo {
-                    zone_id: zone.zone_id,
-                    zone_name: zone.display_name,
-                    state: format!("{:?}", zone.state),
-                    track,
-                    artist,
-                    album,
-                    position_seconds: now_playing.seek_position,
-                    length_seconds: now_playing.length,
-                    image_key: now_playing.image_key.clone(),
-                })
-            } else {
-                None
+            NowPlayingInfo {
+                zone_id: zone.zone_id,
+                zone_name: zone.display_name,
+                state: format!("{:?}", zone.state),
+                track,
+                artist,
+                album,
+                position_seconds,
+                length_seconds,
+                image_key,
+                is_muted,
             }
         })
         .collect();
