@@ -1029,6 +1029,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 loadingElement.remove();
             }
 
+            // Remove "no zones found" message if it exists
+            const noPlayingElement = container.querySelector('.no-playing');
+            if (noPlayingElement) {
+                noPlayingElement.remove();
+            }
+
             // Get current zone elements
             const existingZones = new Map();
             container.querySelectorAll('.zone').forEach(el => {
