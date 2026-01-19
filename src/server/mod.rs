@@ -1456,6 +1456,46 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             }
         }
 
+        async function refreshQueueIfOpen(zoneId) {
+            // Check if queue popup is currently open for this zone
+            const zoneElement = document.querySelector(`[data-zone-id="${zoneId}"]`);
+            if (!zoneElement) return;
+
+            const existingOverlay = zoneElement.querySelector('.queue-overlay');
+            if (!existingOverlay) return; // Queue not open for this zone
+
+            console.log('Refreshing queue for zone:', zoneId);
+
+            try {
+                // Fetch updated queue data
+                const response = await fetch(`/queue/${encodeURIComponent(zoneId)}`);
+                const data = await response.json();
+
+                // Update the queue content
+                const queueContent = existingOverlay.querySelector('.queue-content');
+                if (queueContent) {
+                    let queueItemsHtml;
+                    if (data.items && data.items.length > 0) {
+                        queueItemsHtml = data.items.map((item, index) => `
+                            <div class="queue-item" ondblclick="playFromQueue('${zoneId}', ${item.queue_item_id})" style="cursor: pointer;">
+                                <div class="queue-item-index">${index + 1}</div>
+                                <div class="queue-item-info">
+                                    <div class="queue-item-title">${item.title}</div>
+                                    ${item.artist ? `<div class="queue-item-artist">${item.artist}</div>` : ''}
+                                </div>
+                                <div class="queue-item-length">${formatTime(item.length)}</div>
+                            </div>
+                        `).join('');
+                    } else {
+                        queueItemsHtml = '<div style="padding: 20px; text-align: center; color: #666;">Queue is empty</div>';
+                    }
+                    queueContent.innerHTML = queueItemsHtml;
+                }
+            } catch (e) {
+                console.error('Error refreshing queue:', e);
+            }
+        }
+
         // WebSocket connection for real-time updates
         let ws = null;
         let reconnectTimeout = null;
@@ -1497,6 +1537,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     } else if (msg.type === 'seek_updated') {
                         // Only update seek position for this specific zone
                         updateSeekPosition(msg.zone_id, msg.seek_position, msg.queue_time_remaining);
+                    } else if (msg.type === 'queue_changed') {
+                        // Queue has changed - refresh if queue popup is open for this zone
+                        refreshQueueIfOpen(msg.zone_id);
                     }
                 } catch (e) {
                     console.error('Error parsing WebSocket message:', e);

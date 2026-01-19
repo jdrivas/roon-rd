@@ -4,7 +4,7 @@ use roon_api::image::{Image, Args as ImageArgs, Scaling, Scale, Format};
 use roon_api::browse::{Browse, BrowseOpts, LoadOpts};
 use std::collections::HashMap;
 use std::sync::Arc;
-use tokio::sync::{RwLock, broadcast};
+use tokio::sync::{RwLock, broadcast, Notify};
 
 /// Image data with content type
 #[derive(Clone, Debug)]
@@ -27,6 +27,10 @@ pub enum WsMessage {
         seek_position: Option<i64>,
         queue_time_remaining: i64,
     },
+    #[serde(rename = "queue_changed")]
+    QueueChanged {
+        zone_id: String,
+    },
 }
 
 /// Wrapper for Roon API client with state management
@@ -35,6 +39,7 @@ pub struct RoonClient {
     zones: Arc<RwLock<HashMap<String, Zone>>>,
     queues: Arc<RwLock<HashMap<String, Vec<QueueItem>>>>, // zone_id -> queue items
     active_queue_zone: Arc<RwLock<Option<String>>>, // zone_id of currently subscribed queue
+    queue_ready: Arc<Notify>, // Notifies when queue data arrives for active zone
     connected: Arc<RwLock<bool>>,
     core_name: Arc<RwLock<Option<String>>>,
     images: Arc<RwLock<HashMap<String, ImageData>>>,
@@ -91,6 +96,7 @@ impl RoonClient {
             zones: Arc::new(RwLock::new(HashMap::new())),
             queues: Arc::new(RwLock::new(HashMap::new())),
             active_queue_zone: Arc::new(RwLock::new(None)),
+            queue_ready: Arc::new(Notify::new()),
             connected: Arc::new(RwLock::new(false)),
             core_name: Arc::new(RwLock::new(None)),
             images: Arc::new(RwLock::new(HashMap::new())),
@@ -135,6 +141,7 @@ impl RoonClient {
         let zones = self.zones.clone();
         let queues = self.queues.clone();
         let active_queue_zone = self.active_queue_zone.clone();
+        let queue_ready = self.queue_ready.clone();
         let connected = self.connected.clone();
         let core_name = self.core_name.clone();
         let images = self.images.clone();
@@ -370,6 +377,9 @@ impl RoonClient {
                                 if let Some(zone_id) = active_zone.as_ref() {
                                     log::info!("Storing queue for active zone: {}", zone_id);
                                     queues.write().await.insert(zone_id.clone(), queue_items);
+
+                                    // Notify waiting subscribers that queue data has arrived
+                                    queue_ready.notify_waiters();
                                 } else {
                                     log::warn!("Received queue data but no active queue zone subscription");
                                 }
@@ -409,6 +419,11 @@ impl RoonClient {
                                             }
                                         }
                                         log::info!("Queue updated for zone {} - now has {} items", zone_id, queue.len());
+
+                                        // Notify frontend via WebSocket that queue has changed
+                                        let _ = ws_tx.send(WsMessage::QueueChanged {
+                                            zone_id: zone_id.clone(),
+                                        });
                                     } else {
                                         log::warn!("Received queue changes for zone {} but no queue cached", zone_id);
                                     }
@@ -460,6 +475,7 @@ impl RoonClient {
 
     /// Subscribe to queue updates for a specific zone
     /// Unsubscribes from any previously active queue subscription first
+    /// Waits for the queue data to arrive with a 2 second timeout
     pub async fn subscribe_to_queue(&self, zone_id: &str) {
         let transport_svc = self.transport_service.read().await;
         if let Some(transport) = transport_svc.as_ref() {
@@ -484,6 +500,19 @@ impl RoonClient {
 
             // Update active zone tracking
             *active_zone = Some(zone_id.to_string());
+            drop(active_zone);
+
+            // Wait for queue data to arrive (with 2 second timeout)
+            log::debug!("Waiting for queue data to arrive...");
+            let timeout = tokio::time::Duration::from_secs(2);
+            match tokio::time::timeout(timeout, self.queue_ready.notified()).await {
+                Ok(_) => {
+                    log::debug!("Queue data received for zone {}", zone_id);
+                }
+                Err(_) => {
+                    log::warn!("Timeout waiting for queue data for zone {}", zone_id);
+                }
+            }
         } else {
             log::warn!("Transport service not available for queue subscription");
         }
