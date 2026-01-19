@@ -757,11 +757,6 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                             </svg>
                                         </button>
                                         ${playPauseBtn}
-                                        <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'stop')">
-                                            <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
-                                                <rect x="4" y="4" width="8" height="8" rx="1"/>
-                                            </svg>
-                                        </button>
                                         <button class="control-btn" onclick="sendControl('${zone.zone_id}', 'next')">
                                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
                                                 <path d="M5 3l6 5-6 5V3z"/>
