@@ -759,7 +759,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
             return `
                 <div class="zone${isStopped ? ' stopped' : ''}" data-zone-id="${zone.zone_id}">
-                    ${(!isStopped && zone.track) ? `
+                    ${!isStopped ? `
                         <div class="zone-content">
                             ${albumArt}
                             <div class="track-details">
@@ -780,7 +780,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                     </div>
                                 </div>
                                 <div class="zone-controls-container">
-                                    <div class="zone-name-label">${zone.zone_name}${getZoneIcon(zone.zone_name, zone.devices)}</div>
+                                    <div class="zone-name-label">${zone.zone_name}${getZoneIcon(zone.zone_name)}</div>
                                     <div class="zone-controls">
                                         <button class="control-btn" onclick="showQueue('${zone.zone_id}')">
                                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -812,7 +812,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         <div class="stopped-state">
                             <div class="stopped-zone-info">
                                 <span>${zone.zone_name}</span>
-                                ${getZoneIcon(zone.zone_name, zone.devices)}
+                                ${getZoneIcon(zone.zone_name)}
                             </div>
                             <div class="stopped-status">Stopped</div>
                         </div>
@@ -834,14 +834,16 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
             // Update zone name label
             const zoneNameLabel = element.querySelector('.zone-name-label');
-            if (zoneNameLabel) zoneNameLabel.innerHTML = zone.zone_name + getZoneIcon(zone.zone_name, zone.devices);
+            if (zoneNameLabel) zoneNameLabel.innerHTML = zone.zone_name + getZoneIcon(zone.zone_name);
 
-            // Update class on zone element
-            element.className = zone.state.toLowerCase() === 'stopped' ? 'zone stopped' : 'zone';
-
-            // If zone changed from/to stopped state, need to rebuild content
+            // Check state BEFORE updating the class
             const wasStopped = element.classList.contains('stopped');
             const isStopped = zone.state.toLowerCase() === 'stopped';
+
+            // Update class on zone element
+            element.className = isStopped ? 'zone stopped' : 'zone';
+
+            // If zone changed from/to stopped state, need to rebuild content
 
             if (wasStopped !== isStopped) {
                 // State changed between stopped and playing/paused, rebuild the zone
@@ -966,40 +968,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         function renderZones() {
             const container = document.getElementById('zones-container');
 
-            // Merge available zones with now playing data
-            const mergedZones = availableZones.map(zone => {
-                // Find matching now playing data
-                const nowPlaying = nowPlayingZones.find(np => np.zone_id === zone.zone_id);
-
-                if (nowPlaying) {
-                    // Zone has now playing data
-                    return {
-                        zone_id: zone.zone_id,
-                        zone_name: zone.display_name,
-                        devices: zone.devices,  // Include devices for icon detection
-                        state: nowPlaying.state,
-                        track: nowPlaying.track,
-                        artist: nowPlaying.artist,
-                        album: nowPlaying.album,
-                        position_seconds: nowPlaying.position_seconds,
-                        length_seconds: nowPlaying.length_seconds,
-                        image_key: nowPlaying.image_key
-                    };
-                } else {
-                    // Zone is stopped
-                    return {
-                        zone_id: zone.zone_id,
-                        zone_name: zone.display_name,
-                        devices: zone.devices,  // Include devices for icon detection
-                        state: zone.state
-                    };
-                }
-            });
-
-            // Filter by selected zone
-            let zonesToShow = mergedZones;
+            // Use nowPlayingZones directly - it contains ALL zones including stopped ones
+            // with complete data including is_muted
+            let zonesToShow = nowPlayingZones;
             if (selectedZone !== 'all') {
-                zonesToShow = mergedZones.filter(z => z.zone_id === selectedZone);
+                zonesToShow = nowPlayingZones.filter(z => z.zone_id === selectedZone);
             }
 
             // Sort zones: playing/paused first, then stopped
@@ -1056,13 +1029,19 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     // Update existing zone element
                     updateZoneElement(existingZone, zone);
 
-                    // Ensure correct order
-                    const currentIndex = Array.from(container.children).indexOf(existingZone);
-                    if (currentIndex !== index) {
-                        if (index >= container.children.length) {
-                            container.appendChild(existingZone);
-                        } else {
-                            container.insertBefore(existingZone, container.children[index]);
+                    // If element was replaced (state transition), get the new element
+                    // The new element will have the same data-zone-id
+                    const currentElement = container.querySelector(`[data-zone-id="${zone.zone_id}"]`);
+
+                    if (currentElement) {
+                        // Ensure correct order
+                        const currentIndex = Array.from(container.children).indexOf(currentElement);
+                        if (currentIndex !== index) {
+                            if (index >= container.children.length) {
+                                container.appendChild(currentElement);
+                            } else {
+                                container.insertBefore(currentElement, container.children[index]);
+                            }
                         }
                     }
                 } else {
