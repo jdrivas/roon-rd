@@ -1,4 +1,4 @@
-use roon_api::{info, Info, RoonApi, CoreEvent, Services, Parsed};
+use roon_api::{Info, RoonApi, CoreEvent, Services, Parsed};
 use roon_api::transport::{Transport, Zone, QueueItem};
 use roon_api::image::{Image, Args as ImageArgs, Scaling, Scale, Format};
 use roon_api::browse::{Browse, BrowseOpts, LoadOpts};

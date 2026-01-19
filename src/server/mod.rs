@@ -319,6 +319,22 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             padding: 40px;
             color: #666;
         }
+        .stopped-state {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 40px;
+            font-size: 1.5rem;
+        }
+        .stopped-zone-info {
+            display: flex;
+            align-items: center;
+            gap: 10px;
+        }
+        .stopped-status {
+            color: #888;
+            font-size: 1.5rem;
+        }
         .loading {
             text-align: center;
             padding: 40px;
@@ -733,9 +749,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     </svg>
                 </button>`;
 
+            const isStopped = state === 'stopped';
+
             return `
                 <div class="zone" data-zone-id="${zone.zone_id}">
-                    ${zone.track ? `
+                    ${!isStopped && zone.track ? `
                         <div class="zone-content">
                             ${albumArt}
                             <div class="track-details">
@@ -790,7 +808,15 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                 </div>
                             </div>
                         </div>
-                    ` : '<div class="no-playing">No track loaded</div>'}
+                    ` : `
+                        <div class="stopped-state">
+                            <div class="stopped-zone-info">
+                                <span>${zone.zone_name}</span>
+                                ${getZoneIcon(zone.zone_name, zone.devices)}
+                            </div>
+                            <div class="stopped-status">Stopped</div>
+                        </div>
+                    `}
                 </div>
             `;
         }
