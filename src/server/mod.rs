@@ -398,6 +398,18 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .control-btn.pause-active:hover {
             color: #86efac;  /* Lighter green on hover */
         }
+        .control-btn.play-paused {
+            color: #3498db;  /* Blue color indicating paused state */
+        }
+        .control-btn.play-paused:hover {
+            color: #5dade2;  /* Lighter blue on hover */
+        }
+        .control-btn.play-stopped {
+            color: rgba(255, 255, 255, 0.9);  /* White color indicating stopped state */
+        }
+        .control-btn.play-stopped:hover {
+            color: rgba(255, 255, 255, 1);  /* Brighter white on hover */
+        }
         .control-btn.muted {
             color: #dc2626;  /* Bright red color indicating muted */
         }
@@ -703,7 +715,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 ? `<img class="album-art" src="/image/${encodeURIComponent(zone.image_key)}" alt="Album Art">`
                 : `<div class="album-art-placeholder">${placeholderSvg}</div>`;
 
-            const isPlaying = zone.state.toLowerCase() === 'playing';
+            const state = zone.state.toLowerCase();
+            const isPlaying = state === 'playing';
+            const isPaused = state === 'paused';
+            const isStopped = state === 'stopped';
+
             const playPauseBtn = isPlaying
                 ? `<button class="control-btn play-pause-btn pause-active" onclick="sendControl('${zone.zone_id}', 'pause')">
                     <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -711,7 +727,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         <rect x="9" y="3" width="2" height="10"/>
                     </svg>
                 </button>`
-                : `<button class="control-btn play-pause-btn" onclick="sendControl('${zone.zone_id}', 'play')">
+                : `<button class="control-btn play-pause-btn ${isPaused ? 'play-paused' : 'play-stopped'}" onclick="sendControl('${zone.zone_id}', 'play')">
                     <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
                         <path d="M5 3l8 5-8 5V3z"/>
                     </svg>
@@ -863,7 +879,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 }
 
                 // Update play/pause button
-                const isPlaying = zone.state.toLowerCase() === 'playing';
+                const state = zone.state.toLowerCase();
+                const isPlaying = state === 'playing';
+                const isPaused = state === 'paused';
                 const playPauseBtn = element.querySelector('.play-pause-btn');
                 if (playPauseBtn) {
                     if (isPlaying) {
@@ -874,6 +892,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             </svg>`;
                         playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'pause')`);
                         playPauseBtn.classList.add('pause-active');
+                        playPauseBtn.classList.remove('play-paused', 'play-stopped');
                     } else {
                         playPauseBtn.innerHTML = `
                             <svg viewBox="0 0 16 16" fill="currentColor" stroke="none">
@@ -881,6 +900,13 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             </svg>`;
                         playPauseBtn.setAttribute('onclick', `sendControl('${zone.zone_id}', 'play')`);
                         playPauseBtn.classList.remove('pause-active');
+                        if (isPaused) {
+                            playPauseBtn.classList.add('play-paused');
+                            playPauseBtn.classList.remove('play-stopped');
+                        } else {
+                            playPauseBtn.classList.add('play-stopped');
+                            playPauseBtn.classList.remove('play-paused');
+                        }
                     }
                 }
             }

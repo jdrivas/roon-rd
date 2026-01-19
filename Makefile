@@ -120,7 +120,7 @@ github-release: release
 	echo "Creating release v$(VERSION)..."; \
 	gh release create v$(VERSION) \
 		--title "Roon Remote Display v$(VERSION)" \
-		--notes "Release v$(VERSION) - Roon Remote Display\n\n## Binaries\n- macOS ARM64 (Apple Silicon)\n- macOS x64 (Intel)\n- Linux x64 (if available)\n- Windows x64\n\n## Installation\nDownload the appropriate binary for your platform and run it." \
+		--generate-notes \
 		$$BINARIES
 	@echo "✓ GitHub release v$(VERSION) created successfully!"
 	@echo "  View at: https://github.com/jdrivas/roon-rd/releases/tag/v$(VERSION)"
