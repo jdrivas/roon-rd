@@ -975,7 +975,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 html += `<option value="${zone.zone_id}">${zone.display_name}</option>`;
             }
             // Add version
-            html += '<option disabled class="version">v1.3.3</option>';
+            html += '<option disabled class="version">__VERSION__</option>';
             zoneSelect.innerHTML = html;
 
             // Set selected value
@@ -1669,8 +1669,9 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
     Ok(())
 }
 
-async fn spa_handler() -> Html<&'static str> {
-    Html(SPA_HTML)
+async fn spa_handler() -> Html<String> {
+    let html = SPA_HTML.replace("__VERSION__", &format!("v{}", env!("CARGO_PKG_VERSION")));
+    Html(html)
 }
 
 async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
