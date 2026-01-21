@@ -1,6 +1,7 @@
 mod cli;
 mod server;
 mod roon;
+mod upnp;
 
 use clap::{Parser, Subcommand};
 use simplelog::*;
@@ -18,6 +19,10 @@ struct Cli {
     /// Enable verbose logging
     #[arg(short, long, global = true)]
     verbose: bool,
+
+    /// UPnP-only mode (don't connect to Roon)
+    #[arg(long, global = true)]
+    upnp_only: bool,
 }
 
 #[derive(Subcommand)]
@@ -45,12 +50,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // Determine log level based on mode and verbose flag
     let log_level = match &cli.command {
         Commands::Query { .. } | Commands::Interactive => {
-            // CLI mode: silent unless verbose
-            if cli.verbose {
-                LevelFilter::Debug
-            } else {
-                LevelFilter::Off
-            }
+            // CLI/Interactive mode: Always initialize at Trace level to allow dynamic control
+            // The actual level will be controlled via log::set_max_level() in interactive mode
+            LevelFilter::Trace
         }
         Commands::Server { .. } => {
             // Server mode: info by default, debug if verbose
@@ -63,34 +65,50 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if log_level != LevelFilter::Off {
+        // Configure logging to filter out noisy dependencies
+        let config = ConfigBuilder::new()
+            .add_filter_ignore_str("rustyline")  // Ignore rustyline debug messages
+            .add_filter_ignore_str("hyper")       // Ignore hyper HTTP client debug messages
+            .add_filter_ignore_str("roon_api::moo")  // Ignore roon_api ping messages
+            .add_filter_ignore_str("tokio_tungstenite")  // Ignore WebSocket polling messages
+            .build();
+
         CombinedLogger::init(vec![
             TermLogger::new(
                 log_level,
-                Config::default(),
+                config,
                 TerminalMode::Mixed,
                 ColorChoice::Auto,
             ),
         ])?;
     }
 
-    // Create and initialize Roon client
-    log::info!("Initializing Roon Remote Display...");
-    let mut roon_client = RoonClient::new()?;
-    roon_client.connect().await?;
-
-    let client = Arc::new(Mutex::new(roon_client));
+    // Create and initialize Roon client (unless upnp-only mode)
+    let client = if cli.upnp_only {
+        // Create a dummy client that won't be used
+        None
+    } else {
+        log::info!("Initializing Roon Remote Display...");
+        let mut roon_client = RoonClient::new()?;
+        roon_client.connect().await?;
+        Some(Arc::new(Mutex::new(roon_client)))
+    };
 
     // Handle commands
     match cli.command {
         Commands::Query { args } => {
             let query_string = args.join(" ");
-            cli::handle_query(client, &query_string).await?;
+            cli::handle_query(client, &query_string, cli.verbose).await?;
         }
         Commands::Server { port } => {
-            server::start_server(client, port).await?;
+            if let Some(client) = client {
+                server::start_server(client, port).await?;
+            } else {
+                return Err("Server mode requires Roon connection. Remove --upnp-only flag.".into());
+            }
         }
         Commands::Interactive => {
-            cli::handle_interactive(client).await?;
+            cli::handle_interactive(client, cli.verbose).await?;
         }
     }
 

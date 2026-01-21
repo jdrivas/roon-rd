@@ -30,3 +30,13 @@ simplelog = "0.12"
 
 # Interactive readline with history
 rustyline = "14"
+
+# Terminal colors
+colored = "2.1"
+
+# UPnP/SSDP discovery and control
+ssdp-client = "1.0"
+rupnp = "2.0"
+reqwest = { version = "0.12", default-features = false, features = ["rustls-tls"] }
+quick-xml = { version = "0.36", features = ["serialize"] }
+regex = "1.10"

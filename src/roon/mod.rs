@@ -224,6 +224,7 @@ impl RoonClient {
                                 }
                             }
                             Parsed::Zones(zones_changed) => {
+                                log::debug!("Roon API Zones response:\n{:#?}", zones_changed);
                                 log::debug!("Zones changed, updating zone map");
                                 let mut zone_map = zones.write().await;
 
@@ -264,6 +265,7 @@ impl RoonClient {
                                 let _ = ws_tx.send(WsMessage::ZonesChanged);
                             }
                             Parsed::ZonesRemoved(zones_removed) => {
+                                log::debug!("Roon API ZonesRemoved response:\n{:#?}", zones_removed);
                                 log::debug!("Zones removed");
                                 let mut zone_map = zones.write().await;
 
@@ -276,7 +278,8 @@ impl RoonClient {
                                 let _ = ws_tx.send(WsMessage::ZonesChanged);
                             }
                             Parsed::ZonesSeek(zones_seek) => {
-                                log::debug!("Zone seek position updated");
+                                log::trace!("Roon API ZonesSeek response:\n{:#?}", zones_seek);
+                                log::trace!("Zone seek position updated");
                                 let mut zone_map = zones.write().await;
 
                                 // Update seek positions and broadcast individual updates
@@ -296,20 +299,21 @@ impl RoonClient {
                                 }
                             }
                             Parsed::Jpeg((image_key, data)) => {
-                                log::debug!("Received JPEG image: {} ({} bytes)", image_key, data.len());
+                                log::debug!("Roon API JPEG image response: key={}, size={} bytes", image_key, data.len());
                                 images.write().await.insert(image_key, ImageData {
                                     content_type: "image/jpeg".to_string(),
                                     data,
                                 });
                             }
                             Parsed::Png((image_key, data)) => {
-                                log::debug!("Received PNG image: {} ({} bytes)", image_key, data.len());
+                                log::debug!("Roon API PNG image response: key={}, size={} bytes", image_key, data.len());
                                 images.write().await.insert(image_key, ImageData {
                                     content_type: "image/png".to_string(),
                                     data,
                                 });
                             }
                             Parsed::BrowseResult(result, session_key) => {
+                                log::debug!("Roon API BrowseResult response:\n{:#?}", result);
                                 log::info!("Browse result - action: {:?}", result.action);
                                 if let Some(item) = &result.item {
                                     log::info!("  Item title: {}", item.title);
@@ -339,6 +343,7 @@ impl RoonClient {
                                 }
                             }
                             Parsed::LoadResult(result, session_key) => {
+                                log::debug!("Roon API LoadResult response:\n{:#?}", result);
                                 log::info!("Load result - {} items", result.items.len());
                                 let mut now_playing_item_key = None;
 
@@ -370,6 +375,7 @@ impl RoonClient {
                                 }
                             }
                             Parsed::Queue(queue_items) => {
+                                log::debug!("Roon API Queue response:\n{:#?}", queue_items);
                                 log::info!("Queue snapshot - {} items", queue_items.len());
 
                                 // Store queue for the active subscribed zone
@@ -385,6 +391,7 @@ impl RoonClient {
                                 }
                             }
                             Parsed::QueueChanges(queue_changes) => {
+                                log::debug!("Roon API QueueChanges response:\n{:#?}", queue_changes);
                                 log::info!("Queue changes - {} operations", queue_changes.len());
 
                                 // Apply changes to the active zone's queue
@@ -583,6 +590,8 @@ impl RoonClient {
     pub async fn control_zone(&self, zone_id: &str, control: &str) -> Result<(), String> {
         use roon_api::transport::Control;
 
+        log::debug!("Roon API control_zone request: zone_id={}, control={}", zone_id, control);
+
         let transport = self.transport_service.read().await;
         if let Some(transport) = transport.as_ref() {
             let control_enum = match control {
@@ -596,6 +605,7 @@ impl RoonClient {
             };
 
             transport.control(zone_id, &control_enum).await;
+            log::debug!("Roon API control_zone completed successfully");
             Ok(())
         } else {
             Err("Transport service not available".to_string())
@@ -604,9 +614,12 @@ impl RoonClient {
 
     /// Play from a specific queue item
     pub async fn play_from_queue_item(&self, zone_id: &str, queue_item_id: u32) -> Result<(), String> {
+        log::debug!("Roon API play_from_queue_item request: zone_id={}, queue_item_id={}", zone_id, queue_item_id);
+
         let transport = self.transport_service.read().await;
         if let Some(transport) = transport.as_ref() {
             transport.play_from_here(zone_id, queue_item_id).await;
+            log::debug!("Roon API play_from_queue_item completed successfully");
             Ok(())
         } else {
             Err("Transport service not available".to_string())
@@ -617,9 +630,12 @@ impl RoonClient {
     pub async fn seek_zone(&self, zone_id: &str, seconds: i32) -> Result<(), String> {
         use roon_api::transport::Seek;
 
+        log::debug!("Roon API seek_zone request: zone_id={}, seconds={}", zone_id, seconds);
+
         let transport = self.transport_service.read().await;
         if let Some(transport) = transport.as_ref() {
             transport.seek(zone_id, &Seek::Absolute, seconds).await;
+            log::debug!("Roon API seek_zone completed successfully");
             Ok(())
         } else {
             Err("Transport service not available".to_string())
@@ -629,6 +645,8 @@ impl RoonClient {
     /// Mute or unmute an output
     pub async fn mute_output(&self, zone_id: &str, mute: bool) -> Result<(), String> {
         use roon_api::transport::volume::Mute;
+
+        log::debug!("Roon API mute_output request: zone_id={}, mute={}", zone_id, mute);
 
         // First, get the zone to find its output ID
         let zones = self.zones.read().await;
@@ -644,6 +662,7 @@ impl RoonClient {
         if let Some(transport) = transport.as_ref() {
             let mute_enum = if mute { Mute::Mute } else { Mute::Unmute };
             transport.mute(output_id, &mute_enum).await;
+            log::debug!("Roon API mute_output completed successfully");
             Ok(())
         } else {
             Err("Transport service not available".to_string())

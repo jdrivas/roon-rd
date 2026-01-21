@@ -354,7 +354,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .zone-controls-container {
             display: flex;
             flex-direction: column;
-            align-items: flex-start;
+            align-items: flex-end;
             align-self: flex-end;
             margin-top: 12px;
         }
@@ -708,6 +708,17 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             return `${mins}:${secs.toString().padStart(2, '0')}`;
         }
 
+        function formatZoneName(zoneName) {
+            // Check if zone name has output in parentheses
+            const match = zoneName.match(/^(.+?)\s+\((.+)\)$/);
+            if (match) {
+                const name = match[1];
+                const output = match[2];
+                return `${name} <span style="font-size: 0.85em;">(${output})</span>`;
+            }
+            return zoneName;
+        }
+
         function renderZone(zone) {
             const stateClass = zone.state.toLowerCase();
 
@@ -780,7 +791,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                     </div>
                                 </div>
                                 <div class="zone-controls-container">
-                                    <div class="zone-name-label">${zone.zone_name}${getZoneIcon(zone.zone_name)}</div>
+                                    <div class="zone-name-label">${formatZoneName(zone.zone_name)}</div>
                                     <div class="zone-controls">
                                         <button class="control-btn" onclick="showQueue('${zone.zone_id}')">
                                             <svg viewBox="0 0 16 16" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -811,8 +822,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     ` : `
                         <div class="stopped-state">
                             <div class="stopped-zone-info">
-                                <span>${zone.zone_name}</span>
-                                ${getZoneIcon(zone.zone_name)}
+                                <span>${formatZoneName(zone.zone_name)}</span>
                             </div>
                             <div class="stopped-status">Stopped</div>
                         </div>
@@ -834,7 +844,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
             // Update zone name label
             const zoneNameLabel = element.querySelector('.zone-name-label');
-            if (zoneNameLabel) zoneNameLabel.innerHTML = zone.zone_name + getZoneIcon(zone.zone_name);
+            if (zoneNameLabel) zoneNameLabel.innerHTML = formatZoneName(zone.zone_name);
 
             // Check state BEFORE updating the class
             const wasStopped = element.classList.contains('stopped');
@@ -1819,9 +1829,26 @@ async fn now_playing_handler(State(state): State<AppState>) -> Json<NowPlayingRe
             let is_muted = zone.outputs.iter()
                 .find_map(|output| output.volume.as_ref().and_then(|v| v.is_muted));
 
+            // Build zone name with selected output display name
+            let zone_name = if let Some(output) = zone.outputs.first() {
+                // Check if there's a selected source control
+                if let Some(source_controls) = &output.source_controls {
+                    if let Some(selected_source) = source_controls.iter()
+                        .find(|sc| sc.status == roon_api::transport::Status::Selected) {
+                        format!("{} ({})", zone.display_name, selected_source.display_name)
+                    } else {
+                        zone.display_name.clone()
+                    }
+                } else {
+                    zone.display_name.clone()
+                }
+            } else {
+                zone.display_name.clone()
+            };
+
             NowPlayingInfo {
                 zone_id: zone.zone_id,
-                zone_name: zone.display_name,
+                zone_name,
                 state: format!("{:?}", zone.state),
                 track,
                 artist,
