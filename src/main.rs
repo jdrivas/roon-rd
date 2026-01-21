@@ -12,6 +12,7 @@ use roon::RoonClient;
 #[derive(Parser)]
 #[command(name = "roon-rd")]
 #[command(about = "Roon Remote Display - Query and serve Roon playback information", long_about = None)]
+#[command(version = env!("CARGO_PKG_VERSION"))]
 struct Cli {
     #[command(subcommand)]
     command: Commands,

@@ -25,6 +25,7 @@ impl CommandCompleter {
             "quit".to_string(),
             "exit".to_string(),
             "verbose".to_string(),
+            "version".to_string(),
             // UPnP commands
             "upnp-discover".to_string(),
             "upnp-renderers".to_string(),
@@ -288,6 +289,12 @@ async fn execute_query(client: Option<&RoonClient>, query_type: &str, _verbose: 
             // This is handled in interactive mode, not here
             Ok(())
         }
+        "version" => {
+            println!();
+            println!("  roon-rd version {}", env!("CARGO_PKG_VERSION"));
+            println!();
+            Ok(())
+        }
         "help" => {
             println!();
             println!("  Available commands:");
@@ -309,6 +316,7 @@ async fn execute_query(client: Option<&RoonClient>, query_type: &str, _verbose: 
             println!();
             println!("  General:");
             println!("    verbose            - Toggle verbose logging on/off");
+            println!("    version            - Show version information");
             println!("    help               - Show this help message");
             println!("    quit               - Exit interactive mode");
             println!();

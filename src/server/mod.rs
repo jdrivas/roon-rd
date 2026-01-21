@@ -65,6 +65,11 @@ pub struct ReconnectResponse {
     pub message: String,
 }
 
+#[derive(Serialize, Deserialize)]
+pub struct VersionResponse {
+    pub version: String,
+}
+
 /// Embedded SPA HTML
 const SPA_HTML: &str = r#"<!DOCTYPE html>
 <html lang="en">
@@ -1650,6 +1655,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
         .route("/", get(spa_handler))
         .route("/ws", get(ws_handler))
         .route("/status", get(status_handler))
+        .route("/version", get(version_handler))
         .route("/reconnect", post(reconnect_handler))
         .route("/zones", get(zones_handler))
         .route("/now-playing", get(now_playing_handler))
@@ -1668,6 +1674,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
     println!("\nOpen http://localhost:{} in your browser", port);
     println!("\nAPI endpoints:");
     println!("  GET /status          - Get connection status (JSON)");
+    println!("  GET /version         - Get server version (JSON)");
     println!("  GET /zones           - Get available zones (JSON)");
     println!("  GET /now-playing     - Get currently playing tracks (JSON)");
     println!("  GET /image/:key      - Get album art image");
@@ -1700,6 +1707,12 @@ async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
         connected,
         core_name,
         message,
+    })
+}
+
+async fn version_handler() -> Json<VersionResponse> {
+    Json(VersionResponse {
+        version: env!("CARGO_PKG_VERSION").to_string(),
     })
 }
 
