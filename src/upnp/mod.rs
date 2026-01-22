@@ -89,10 +89,114 @@ pub async fn discover_media_renderers(timeout_secs: u64) -> Result<Vec<UpnpDevic
     Ok(devices)
 }
 
-/// Get detailed device information
+/// Get raw XML from a UPnP device (pretty-printed)
+pub async fn get_device_xml(location: &str) -> Result<String, Box<dyn std::error::Error>> {
+    log::info!("Fetching raw XML from: {}", location);
+
+    let response = reqwest::get(location).await?;
+    let xml = response.text().await?;
+
+    log::debug!("UPnP raw XML response:\n{}", xml);
+
+    // Pretty-print the XML
+    let pretty_xml = pretty_print_xml(&xml)?;
+
+    Ok(pretty_xml)
+}
+
+/// Get service description (SCPD) XML for a specific service
+pub async fn get_service_description(device_location: &str, service_type: &str) -> Result<String, Box<dyn std::error::Error>> {
+    log::info!("Fetching service description for {} from: {}", service_type, device_location);
+
+    // Validate the device location looks like a URL
+    if !device_location.starts_with("http://") && !device_location.starts_with("https://") {
+        return Err(format!("Invalid device URL: '{}'. Must start with http:// or https://", device_location).into());
+    }
+
+    // Fetch the device XML first
+    let device_xml = reqwest::get(device_location).await?.text().await?;
+
+    // Parse the service type to extract name and version
+    // e.g., "AVTransport:2" or "urn:schemas-upnp-org:service:AVTransport:2"
+    let service_name = if service_type.contains(':') {
+        let parts: Vec<&str> = service_type.split(':').collect();
+        if parts.len() >= 2 {
+            parts[parts.len() - 2]
+        } else {
+            service_type
+        }
+    } else {
+        service_type
+    };
+
+    // Look for SCPDURL in the device XML for the specified service
+    // This is a simple regex-based approach - could be more robust with proper XML parsing
+    let scpd_pattern = format!(r"<serviceType>.*{}.*</serviceType>.*?<SCPDURL>(.*?)</SCPDURL>", regex::escape(service_name));
+    let re = regex::Regex::new(&scpd_pattern)?;
+
+    let scpd_path = if let Some(caps) = re.captures(&device_xml) {
+        caps.get(1)
+            .ok_or("SCPD URL not found in device description")?
+            .as_str()
+    } else {
+        return Err(format!("Service {} not found in device description", service_name).into());
+    };
+
+    // Construct full URL for SCPD
+    let base_url = url::Url::parse(device_location)?;
+    let scpd_url = if scpd_path.starts_with("http") {
+        scpd_path.to_string()
+    } else {
+        base_url.join(scpd_path)?.to_string()
+    };
+
+    log::debug!("Fetching SCPD from: {}", scpd_url);
+
+    // Fetch the SCPD XML
+    let xml = reqwest::get(&scpd_url).await?.text().await?;
+
+    log::debug!("UPnP SCPD XML response:\n{}", xml);
+
+    // Pretty-print the XML
+    let pretty_xml = pretty_print_xml(&xml)?;
+
+    Ok(pretty_xml)
+}
+
+/// Pretty-print XML with indentation
+fn pretty_print_xml(xml: &str) -> Result<String, Box<dyn std::error::Error>> {
+    use quick_xml::events::Event;
+    use quick_xml::Reader;
+    use quick_xml::Writer;
+    use std::io::Cursor;
+
+    let mut reader = Reader::from_str(xml);
+    reader.config_mut().trim_text(true);
+
+    let mut writer = Writer::new_with_indent(Cursor::new(Vec::new()), b' ', 2);
+
+    loop {
+        match reader.read_event() {
+            Ok(Event::Eof) => break,
+            Ok(event) => writer.write_event(event)?,
+            Err(e) => return Err(format!("Error parsing XML: {}", e).into()),
+        }
+    }
+
+    let result = writer.into_inner().into_inner();
+    Ok(String::from_utf8(result)?)
+}
+
+/// Get detailed device information including available services
 pub async fn get_device_info(location: &str) -> Result<DeviceInfo, Box<dyn std::error::Error>> {
     log::info!("Fetching device info from: {}", location);
     let device = rupnp::Device::from_url(location.parse()?).await?;
+
+    // Collect available services
+    let services: Vec<String> = device.services()
+        .iter()
+        .map(|s| s.service_type().to_string())
+        .collect();
 
     let device_info = DeviceInfo {
         friendly_name: device.friendly_name().to_string(),
@@ -101,6 +205,7 @@ pub async fn get_device_info(location: &str) -> Result<DeviceInfo, Box<dyn std::
         model_number: None,
         serial_number: None,
         device_type: device.device_type().to_string(),
+        services,
     };
 
     log::debug!("UPnP get_device_info response:\n{:#?}", device_info);
@@ -117,15 +222,17 @@ pub struct DeviceInfo {
     pub model_number: Option<String>,
     pub serial_number: Option<String>,
     pub device_type: String,
+    pub services: Vec<String>,
 }
 
 /// Get position info from a MediaRenderer (includes current track metadata)
 pub async fn get_position_info(device_location: &str) -> Result<PositionInfo, Box<dyn std::error::Error>> {
     let device = rupnp::Device::from_url(device_location.parse()?).await?;
 
-    // Find AVTransport service
+    // Find AVTransport service (try version 2 first, then version 1)
     let service = device
-        .find_service(&URN::service("schemas-upnp-org", "AVTransport", 1))
+        .find_service(&URN::service("schemas-upnp-org", "AVTransport", 2))
+        .or_else(|| device.find_service(&URN::service("schemas-upnp-org", "AVTransport", 1)))
         .ok_or("AVTransport service not found")?;
 
     // Call GetPositionInfo action
@@ -157,6 +264,42 @@ pub struct PositionInfo {
     pub track_metadata: String,  // DIDL-Lite XML
     pub track_uri: String,
     pub rel_time: String,
+}
+
+/// Get transport info from a MediaRenderer (playback state)
+pub async fn get_transport_info(device_location: &str) -> Result<TransportInfo, Box<dyn std::error::Error>> {
+    let device = rupnp::Device::from_url(device_location.parse()?).await?;
+
+    // Find AVTransport service (try version 2 first, then version 1)
+    let service = device
+        .find_service(&URN::service("schemas-upnp-org", "AVTransport", 2))
+        .or_else(|| device.find_service(&URN::service("schemas-upnp-org", "AVTransport", 1)))
+        .ok_or("AVTransport service not found")?;
+
+    // Call GetTransportInfo action
+    let args = "<InstanceID>0</InstanceID>";
+    let response = service.action(device.url(), "GetTransportInfo", args).await?;
+
+    log::debug!("UPnP GetTransportInfo raw response:\n{:#?}", response);
+
+    // Parse response
+    let transport_info = TransportInfo {
+        current_transport_state: response.get("CurrentTransportState").unwrap_or(&"UNKNOWN".to_string()).clone(),
+        current_transport_status: response.get("CurrentTransportStatus").unwrap_or(&"OK".to_string()).clone(),
+        current_speed: response.get("CurrentSpeed").unwrap_or(&"1".to_string()).clone(),
+    };
+
+    log::debug!("UPnP GetTransportInfo parsed response:\n{:#?}", transport_info);
+
+    Ok(transport_info)
+}
+
+/// Transport information from AVTransport GetTransportInfo
+#[derive(Debug, Clone)]
+pub struct TransportInfo {
+    pub current_transport_state: String,  // PLAYING, PAUSED_PLAYBACK, STOPPED, etc.
+    pub current_transport_status: String,  // OK, ERROR_OCCURRED, etc.
+    pub current_speed: String,  // Usually "1" for normal playback
 }
 
 /// Parse DIDL-Lite metadata to extract audio format information

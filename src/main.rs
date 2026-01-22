@@ -2,6 +2,7 @@ mod cli;
 mod server;
 mod roon;
 mod upnp;
+mod tui;
 
 use clap::{Parser, Subcommand};
 use simplelog::*;
@@ -42,6 +43,8 @@ enum Commands {
     },
     /// Interactive mode - read commands from stdin
     Interactive,
+    /// Terminal UI mode - interactive with fixed prompt
+    Tui,
 }
 
 #[tokio::main]
@@ -54,6 +57,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             // CLI/Interactive mode: Always initialize at Trace level to allow dynamic control
             // The actual level will be controlled via log::set_max_level() in interactive mode
             LevelFilter::Trace
+        }
+        Commands::Tui => {
+            // TUI mode: Don't initialize standard logger, we'll handle output via TUI
+            LevelFilter::Off
         }
         Commands::Server { .. } => {
             // Server mode: info by default, debug if verbose
@@ -110,6 +117,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Interactive => {
             cli::handle_interactive(client, cli.verbose).await?;
+        }
+        Commands::Tui => {
+            cli::handle_tui(client, cli.verbose).await?;
         }
     }
 
