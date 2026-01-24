@@ -1,5 +1,5 @@
 use roon_api::{Info, RoonApi, CoreEvent, Services, Parsed};
-use roon_api::transport::{Transport, Zone, QueueItem};
+use roon_api::transport::{Transport, Zone, QueueItem, State};
 use roon_api::image::{Image, Args as ImageArgs, Scaling, Scale, Format};
 use roon_api::browse::{Browse, BrowseOpts, LoadOpts};
 use std::collections::HashMap;
@@ -13,12 +13,30 @@ pub struct ImageData {
     pub data: Vec<u8>,
 }
 
+/// Simplified zone data for WebSocket updates and HTTP responses
+#[derive(Clone, Debug, serde::Serialize, serde::Deserialize)]
+pub struct WsZoneData {
+    pub zone_id: String,
+    pub zone_name: String,
+    pub state: String,
+    pub track: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub position_seconds: Option<i64>,
+    pub length_seconds: Option<u32>,
+    pub image_key: Option<String>,
+    pub is_muted: Option<bool>,
+    pub dcs_format: Option<String>,
+}
+
 /// Message types for WebSocket updates
 #[derive(Clone, Debug, serde::Serialize)]
 #[serde(tag = "type")]
 pub enum WsMessage {
     #[serde(rename = "zones_changed")]
-    ZonesChanged,
+    ZonesChanged {
+        now_playing: Vec<WsZoneData>,
+    },
     #[serde(rename = "connection_changed")]
     ConnectionChanged { connected: bool },
     #[serde(rename = "seek_updated")]
@@ -47,9 +65,168 @@ pub struct RoonClient {
     transport_service: Arc<RwLock<Option<Transport>>>,
     browse_service: Arc<RwLock<Option<Browse>>>,
     ws_tx: broadcast::Sender<WsMessage>,
+    pending_stops: Arc<tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>, // zone_id -> delayed stop task
 }
 
 const CONFIG_PATH: &str = "roon-rd-config.json";
+
+/// Delay in milliseconds to wait for dCS device to update after a zone change
+/// This gives the dCS device time to process the new stream before browsers fetch the format
+const DCS_UPDATE_DELAY_MS: u64 = 200;
+
+/// Delay in milliseconds before broadcasting a Stopped state
+/// This prevents UI flickering during track transitions (Playing -> Stopped -> Loading -> Playing)
+/// If another event arrives within this window, the stop is cancelled
+const STOP_BROADCAST_DELAY_MS: u64 = 500;
+
+/// Build WebSocket zone data from zones Arc (standalone function for use in event handlers)
+async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>) -> Vec<WsZoneData> {
+    use crate::dcs;
+
+    let zones_vec: Vec<Zone> = zones.read().await.values().cloned().collect();
+    log::debug!("build_ws_zone_data_from_zones: Processing {} zones", zones_vec.len());
+
+    // Process all zones in parallel
+    let zone_futures: Vec<_> = zones_vec.into_iter().map(|zone| {
+        async move {
+            let zone_id = zone.zone_id.clone();
+            let zone_name = zone.display_name.clone();
+            let zone_state = format!("{:?}", zone.state);
+
+            log::debug!("Processing zone: {} ({}), state: {}", zone_name, zone_id, zone_state);
+
+            // Fetch dCS format on-demand if this is a dCS Vivaldi zone in Playing state
+            let dcs_format = if zone.display_name.starts_with("dCS Vivaldi")
+                && format!("{:?}", zone.state).to_lowercase() == "playing" {
+
+                log::debug!("Zone {} is dCS Vivaldi in Playing state, fetching format...", zone_name);
+
+                match dcs::get_playback_info("dcs-vivaldi.local").await {
+                    Ok(playback_info) => {
+                        log::debug!("dCS playback info retrieved for {}: {:?}", zone_name, playback_info);
+                        // Extract format from audio_format field
+                        if let Some(audio_format) = playback_info.audio_format {
+                            // Only return format if bits_per_sample is valid (non-zero)
+                            if let Some(bits) = audio_format.bits_per_sample {
+                                if bits > 0 {
+                                    let sample_rate_str = if let Some(freq) = audio_format.sample_frequency {
+                                        if freq >= 1000 {
+                                            format!("{} kHz", freq / 1000)
+                                        } else {
+                                            format!("{} Hz", freq)
+                                        }
+                                    } else {
+                                        String::new()
+                                    };
+
+                                    let bit_depth_str = format!("{} bit", bits);
+
+                                    if !sample_rate_str.is_empty() {
+                                        let format_str = format!("{} {}", sample_rate_str, bit_depth_str);
+                                        log::debug!("dCS format for {}: {}", zone_name, format_str);
+                                        Some(format_str)
+                                    } else {
+                                        log::debug!("dCS format missing sample rate for {}", zone_name);
+                                        None
+                                    }
+                                } else {
+                                    log::debug!("dCS format has bits_per_sample=0 for {}, not displaying", zone_name);
+                                    None
+                                }
+                            } else {
+                                log::debug!("dCS format missing bits_per_sample for {}", zone_name);
+                                None
+                            }
+                        } else {
+                            log::debug!("dCS playback info missing audio_format for {}", zone_name);
+                            None
+                        }
+                    }
+                    Err(e) => {
+                        log::warn!("Failed to get dCS playback info for {}: {}", zone_name, e);
+                        None
+                    }
+                }
+            } else {
+                log::debug!("Zone {} not eligible for dCS format (name: {}, state: {})",
+                           zone_id, zone.display_name, format!("{:?}", zone.state));
+                None
+            };
+
+            // Extract track info if available
+            let (track, artist, album, position_seconds, length_seconds, image_key) =
+                if let Some(now_playing) = zone.now_playing.as_ref() {
+                    let three_line = &now_playing.three_line;
+                    (
+                        Some(three_line.line1.clone()),
+                        if !three_line.line2.is_empty() {
+                            Some(three_line.line2.clone())
+                        } else {
+                            None
+                        },
+                        if !three_line.line3.is_empty() {
+                            Some(three_line.line3.clone())
+                        } else {
+                            None
+                        },
+                        now_playing.seek_position,
+                        now_playing.length,
+                        now_playing.image_key.clone(),
+                    )
+                } else {
+                    (None, None, None, None, None, None)
+                };
+
+            // Extract is_muted from the first output with volume info
+            let is_muted = zone.outputs.iter()
+                .find_map(|output| output.volume.as_ref().and_then(|v| v.is_muted));
+
+            // Build zone name with selected output display name
+            let zone_name = if let Some(output) = zone.outputs.first() {
+                // Check if there's a selected source control
+                if let Some(source_controls) = &output.source_controls {
+                    if let Some(selected_source) = source_controls.iter()
+                        .find(|sc| sc.status == roon_api::transport::Status::Selected) {
+                        format!("{} ({})", zone.display_name, selected_source.display_name)
+                    } else {
+                        zone.display_name.clone()
+                    }
+                } else {
+                    zone.display_name.clone()
+                }
+            } else {
+                zone.display_name.clone()
+            };
+
+            let ws_data = WsZoneData {
+                zone_id: zone.zone_id,
+                zone_name: zone_name.clone(),
+                state: format!("{:?}", zone.state),
+                track: track.clone(),
+                artist,
+                album,
+                position_seconds,
+                length_seconds,
+                image_key,
+                is_muted,
+                dcs_format: dcs_format.clone(),
+            };
+
+            log::debug!("Built WsZoneData for {}: track={:?}, dcs_format={:?}",
+                       zone_name, track, dcs_format);
+
+            ws_data
+        }
+    }).collect();
+
+    let result = futures_util::future::join_all(zone_futures).await;
+    log::debug!("build_ws_zone_data_from_zones: Returning {} zone data items", result.len());
+    for item in &result {
+        log::debug!("  Zone {}: state={}, track={:?}, dcs_format={:?}",
+                   item.zone_name, item.state, item.track, item.dcs_format);
+    }
+    result
+}
 
 /// Get the local IP address of this machine
 fn get_local_ip() -> String {
@@ -104,6 +281,7 @@ impl RoonClient {
             transport_service: Arc::new(RwLock::new(None)),
             browse_service: Arc::new(RwLock::new(None)),
             ws_tx,
+            pending_stops: Arc::new(tokio::sync::Mutex::new(HashMap::new())),
         })
     }
 
@@ -149,6 +327,7 @@ impl RoonClient {
         let transport_service = self.transport_service.clone();
         let browse_service = self.browse_service.clone();
         let ws_tx = self.ws_tx.clone();
+        let pending_stops = self.pending_stops.clone();
 
         // Start discovery
         let result = self.api.start_discovery(
@@ -261,8 +440,121 @@ impl RoonClient {
                                     }
                                 }
 
-                                // Broadcast zone change via WebSocket
-                                let _ = ws_tx.send(WsMessage::ZonesChanged);
+                                // Check zone states to determine broadcast strategy
+                                let zones_snapshot = zones.read().await.clone();
+
+                                // Categorize zones by state
+                                let mut has_stopped_zones = Vec::new();
+                                let mut has_non_stop_zones = Vec::new();
+                                let has_dcs_playing_zones: Vec<_> = zones_snapshot.iter()
+                                    .filter(|(_, zone)| zone.display_name.starts_with("dCS Vivaldi") && zone.state == State::Playing)
+                                    .map(|(id, _)| id.clone())
+                                    .collect();
+
+                                for (zone_id, zone) in &zones_snapshot {
+                                    match zone.state {
+                                        State::Stopped => has_stopped_zones.push(zone_id.clone()),
+                                        State::Loading | State::Playing | State::Paused => has_non_stop_zones.push(zone_id.clone()),
+                                    }
+                                }
+
+                                // Handle pending stops for zones that are no longer stopped
+                                let pending_stops_clone = pending_stops.clone();
+                                for zone_id in &has_non_stop_zones {
+                                    let mut pending = pending_stops_clone.lock().await;
+                                    if let Some(task) = pending.remove(zone_id) {
+                                        log::debug!("Cancelling pending stop for zone {} due to state change", zone_id);
+                                        task.abort();
+                                    }
+                                }
+
+                                // Handle stopped zones with delay logic
+                                for zone_id in &has_stopped_zones {
+                                    let mut pending = pending_stops_clone.lock().await;
+                                    if let Some(existing_task) = pending.remove(zone_id) {
+                                        // There's already a pending stop - cancel it and broadcast immediately
+                                        log::debug!("Zone {} stopped again - broadcasting immediately (user intent)", zone_id);
+                                        existing_task.abort();
+                                        drop(pending); // Release lock before broadcasting
+
+                                        let zones_clone = zones.clone();
+                                        let ws_tx_clone = ws_tx.clone();
+                                        tokio::spawn(async move {
+                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            log::debug!("Broadcasting immediate stop for zone (double-stop detected)");
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                        });
+                                    } else {
+                                        // No pending stop - start delayed broadcast
+                                        log::debug!("Zone {} stopped - delaying broadcast by {}ms", zone_id, STOP_BROADCAST_DELAY_MS);
+
+                                        let ws_tx_clone = ws_tx.clone();
+                                        let zones_clone = zones.clone();
+                                        let zone_id_clone = zone_id.clone();
+                                        let pending_stops_clone2 = pending_stops_clone.clone();
+
+                                        let task = tokio::spawn(async move {
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(STOP_BROADCAST_DELAY_MS)).await;
+
+                                            // Build and broadcast stop
+                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            log::debug!("Broadcasting delayed stop for zone {}", zone_id_clone);
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+
+                                            // Remove self from pending map
+                                            pending_stops_clone2.lock().await.remove(&zone_id_clone);
+                                        });
+
+                                        pending.insert(zone_id.clone(), task);
+                                    }
+                                }
+
+                                // Skip broadcasting if we only have "loading" state zones
+                                let has_non_loading = zones_snapshot.values()
+                                    .any(|zone| zone.state != State::Loading);
+
+                                // Broadcast non-stop zone updates immediately
+                                if !has_non_stop_zones.is_empty() && has_non_loading {
+                                    if !has_dcs_playing_zones.is_empty() {
+                                        // If we have dCS zones in Playing state, give dCS device a moment to update
+                                        log::debug!("Found {} dCS zones in Playing state, waiting {}ms for dCS to update",
+                                                   has_dcs_playing_zones.len(), DCS_UPDATE_DELAY_MS);
+
+                                        let ws_tx_clone = ws_tx.clone();
+                                        let zones_clone = zones.clone();
+
+                                        tokio::spawn(async move {
+                                            // Brief delay to let dCS device process the new stream
+                                            tokio::time::sleep(tokio::time::Duration::from_millis(DCS_UPDATE_DELAY_MS)).await;
+
+                                            // Build zone data with dCS format
+                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+
+                                            // Broadcast zone change with full data
+                                            log::debug!("Broadcasting zone change (after dCS delay) with {} zones of data", zone_data.len());
+                                            for item in &zone_data {
+                                                log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
+                                                           item.zone_name, item.state, item.track, item.dcs_format);
+                                            }
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                        });
+                                    } else {
+                                        // No dCS zones in Playing state, build and broadcast immediately
+                                        let zones_clone = zones.clone();
+                                        let ws_tx_clone = ws_tx.clone();
+                                        tokio::spawn(async move {
+                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            log::debug!("Broadcasting zone change (no dCS delay) with {} zones of data", zone_data.len());
+                                            for item in &zone_data {
+                                                log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
+                                                           item.zone_name, item.state, item.track, item.dcs_format);
+                                            }
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                        });
+                                    }
+                                } else if has_stopped_zones.is_empty() && !has_non_loading {
+                                    log::debug!("Skipping zone change broadcast - all zones in 'loading' state");
+                                }
                             }
                             Parsed::ZonesRemoved(zones_removed) => {
                                 log::debug!("Roon API ZonesRemoved response:\n{:#?}", zones_removed);
@@ -274,8 +566,18 @@ impl RoonClient {
                                     zone_map.remove(&zone_id);
                                 }
 
-                                // Broadcast zone change via WebSocket
-                                let _ = ws_tx.send(WsMessage::ZonesChanged);
+                                // Broadcast zone change with full data via WebSocket
+                                let zones_clone = zones.clone();
+                                let ws_tx_clone = ws_tx.clone();
+                                tokio::spawn(async move {
+                                    let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                    log::debug!("Broadcasting zone removal with {} zones of data", zone_data.len());
+                                    for item in &zone_data {
+                                        log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
+                                                   item.zone_name, item.state, item.track, item.dcs_format);
+                                    }
+                                    let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                });
                             }
                             Parsed::ZonesSeek(zones_seek) => {
                                 log::trace!("Roon API ZonesSeek response:\n{:#?}", zones_seek);
@@ -473,6 +775,134 @@ impl RoonClient {
     /// Get all available zones
     pub async fn get_zones(&self) -> Vec<Zone> {
         self.zones.read().await.values().cloned().collect()
+    }
+
+    /// Build WebSocket zone data with dCS format
+    /// This method calls the standalone function with the zones Arc
+    pub async fn build_ws_zone_data(&self) -> Vec<WsZoneData> {
+        build_ws_zone_data_from_zones(self.zones.clone()).await
+    }
+
+    /// OLD IMPLEMENTATION - kept for reference but not used
+    #[allow(dead_code)]
+    async fn build_ws_zone_data_old(&self) -> Vec<WsZoneData> {
+        use crate::dcs;
+
+        let zones = self.get_zones().await;
+
+        // Process all zones in parallel
+        let zone_futures: Vec<_> = zones.into_iter().map(|zone| {
+            async move {
+                // Fetch dCS format on-demand if this is a dCS Vivaldi zone in Playing state
+                let dcs_format = if zone.display_name.starts_with("dCS Vivaldi")
+                    && format!("{:?}", zone.state).to_lowercase() == "playing" {
+
+                    match dcs::get_playback_info("dcs-vivaldi.local").await {
+                        Ok(playback_info) => {
+                            // Extract format from audio_format field
+                            if let Some(audio_format) = playback_info.audio_format {
+                                // Only return format if bits_per_sample is valid (non-zero)
+                                if let Some(bits) = audio_format.bits_per_sample {
+                                    if bits > 0 {
+                                        let sample_rate_str = if let Some(freq) = audio_format.sample_frequency {
+                                            if freq >= 1000 {
+                                                format!("{} kHz", freq / 1000)
+                                            } else {
+                                                format!("{} Hz", freq)
+                                            }
+                                        } else {
+                                            String::new()
+                                        };
+
+                                        let bit_depth_str = format!("{} bit", bits);
+
+                                        if !sample_rate_str.is_empty() {
+                                            Some(format!("{} {}", sample_rate_str, bit_depth_str))
+                                        } else {
+                                            None
+                                        }
+                                    } else {
+                                        log::debug!("dCS format has bits_per_sample=0, not displaying");
+                                        None
+                                    }
+                                } else {
+                                    None
+                                }
+                            } else {
+                                None
+                            }
+                        }
+                        Err(e) => {
+                            log::warn!("Failed to get dCS playback info: {}", e);
+                            None
+                        }
+                    }
+                } else {
+                    None
+                };
+
+                // Extract track info if available
+                let (track, artist, album, position_seconds, length_seconds, image_key) =
+                    if let Some(now_playing) = zone.now_playing.as_ref() {
+                        let three_line = &now_playing.three_line;
+                        (
+                            Some(three_line.line1.clone()),
+                            if !three_line.line2.is_empty() {
+                                Some(three_line.line2.clone())
+                            } else {
+                                None
+                            },
+                            if !three_line.line3.is_empty() {
+                                Some(three_line.line3.clone())
+                            } else {
+                                None
+                            },
+                            now_playing.seek_position,
+                            now_playing.length,
+                            now_playing.image_key.clone(),
+                        )
+                    } else {
+                        (None, None, None, None, None, None)
+                    };
+
+                // Extract is_muted from the first output with volume info
+                let is_muted = zone.outputs.iter()
+                    .find_map(|output| output.volume.as_ref().and_then(|v| v.is_muted));
+
+                // Build zone name with selected output display name
+                let zone_name = if let Some(output) = zone.outputs.first() {
+                    // Check if there's a selected source control
+                    if let Some(source_controls) = &output.source_controls {
+                        if let Some(selected_source) = source_controls.iter()
+                            .find(|sc| sc.status == roon_api::transport::Status::Selected) {
+                            format!("{} ({})", zone.display_name, selected_source.display_name)
+                        } else {
+                            zone.display_name.clone()
+                        }
+                    } else {
+                        zone.display_name.clone()
+                    }
+                } else {
+                    zone.display_name.clone()
+                };
+
+                WsZoneData {
+                    zone_id: zone.zone_id,
+                    zone_name,
+                    state: format!("{:?}", zone.state),
+                    track,
+                    artist,
+                    album,
+                    position_seconds,
+                    length_seconds,
+                    image_key,
+                    is_muted,
+                    dcs_format,
+                }
+            }
+        }).collect();
+
+        futures_util::future::join_all(zone_futures).await
     }
 
     /// Get queue for a specific zone

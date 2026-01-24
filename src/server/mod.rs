@@ -39,23 +39,12 @@ pub struct ZonesResponse {
     pub count: usize,
 }
 
-#[derive(Serialize, Deserialize)]
-pub struct NowPlayingInfo {
-    pub zone_id: String,
-    pub zone_name: String,
-    pub state: String,
-    pub track: Option<String>,
-    pub artist: Option<String>,
-    pub album: Option<String>,
-    pub position_seconds: Option<i64>,
-    pub length_seconds: Option<u32>,
-    pub image_key: Option<String>,
-    pub is_muted: Option<bool>,
-}
+// NowPlayingInfo removed - now using WsZoneData from roon module
+// This eliminates code duplication between WebSocket and HTTP responses
 
 #[derive(Serialize, Deserialize)]
 pub struct NowPlayingResponse {
-    pub now_playing: Vec<NowPlayingInfo>,
+    pub now_playing: Vec<crate::roon::WsZoneData>,
     pub count: usize,
 }
 
@@ -298,6 +287,12 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .track-album {
             font-size: 0.85rem;
             color: #777;
+        }
+        .track-format {
+            font-size: 0.8rem;
+            color: #888;
+            margin-top: 5px;
+            font-family: 'Courier New', monospace;
         }
         .progress-container {
             margin-top: 15px;
@@ -578,6 +573,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             .track-album {
                 font-size: 1.2rem;
             }
+            .track-format {
+                font-size: 1.1rem;
+            }
             .control-btn {
                 font-size: 1.3rem;
                 padding: 12px 18px;
@@ -784,6 +782,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         <div class="track-title">${zone.track}</div>
                                         ${zone.artist ? `<div class="track-artist">${zone.artist}</div>` : ''}
                                         ${zone.album ? `<div class="track-album">${zone.album}</div>` : ''}
+                                        <div class="track-format">${zone.dcs_format || ''}</div>
                                     </div>
                                     <div class="progress-container">
                                         <div class="progress-bar" onclick="handleSeek(event, '${zone.zone_id}', ${zone.length_seconds || 0})" data-length="${zone.length_seconds || 0}">
@@ -877,6 +876,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const trackTitle = element.querySelector('.track-title');
                 const trackArtist = element.querySelector('.track-artist');
                 const trackAlbum = element.querySelector('.track-album');
+                const trackFormat = element.querySelector('.track-format');
                 const progressFill = element.querySelector('.progress-fill');
                 const progressTimes = element.querySelectorAll('.progress-time span');
                 const albumArt = element.querySelector('.album-art, .album-art-placeholder');
@@ -884,6 +884,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 if (trackTitle) trackTitle.textContent = zone.track;
                 if (trackArtist) trackArtist.textContent = zone.artist || '';
                 if (trackAlbum) trackAlbum.textContent = zone.album || '';
+                // Only update track format if we have format data
+                if (trackFormat && zone.dcs_format) {
+                    trackFormat.textContent = zone.dcs_format;
+                }
 
                 // Update progress bar
                 const progress = zone.length_seconds > 0
@@ -1538,9 +1542,13 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     console.log('WebSocket message:', msg);
 
                     if (msg.type === 'zones_changed') {
-                        // Update zones and now playing data
+                        // Zone change message now includes full zone data
+                        if (msg.now_playing) {
+                            nowPlayingZones = msg.now_playing;
+                            renderZones();
+                        }
+                        // Still update zones list (for zone selector)
                         updateZones();
-                        updateNowPlaying();
                     } else if (msg.type === 'connection_changed') {
                         // Update connection status
                         updateStatus();
@@ -1645,6 +1653,23 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 }
 
+// Route documentation - keep this in sync with the actual routes
+const ROUTES: &[(&str, &str, &str)] = &[
+    ("GET", "/", "Serve the web UI (SPA)"),
+    ("WS", "/ws", "WebSocket connection for real-time updates"),
+    ("GET", "/status", "Get Roon connection status (JSON)"),
+    ("GET", "/version", "Get server version (JSON)"),
+    ("POST", "/reconnect", "Reconnect to Roon Core"),
+    ("GET", "/zones", "Get available Roon zones (JSON)"),
+    ("GET", "/now-playing", "Get currently playing tracks (JSON)"),
+    ("GET", "/queue/:zone_id", "Get queue for a specific zone (JSON)"),
+    ("GET", "/image/:image_key", "Get album art image"),
+    ("POST", "/control/:zone_id", "Control playback (play/pause/stop)"),
+    ("POST", "/seek/:zone_id", "Seek to position in current track"),
+    ("POST", "/mute/:zone_id", "Toggle mute for a zone"),
+    ("POST", "/play-from-queue/:zone_id", "Play a specific item from queue"),
+];
+
 /// Start the web server
 pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(), Box<dyn std::error::Error>> {
     let state = AppState {
@@ -1673,11 +1698,12 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
     println!("Starting server on http://{}", addr);
     println!("\nOpen http://localhost:{} in your browser", port);
     println!("\nAPI endpoints:");
-    println!("  GET /status          - Get connection status (JSON)");
-    println!("  GET /version         - Get server version (JSON)");
-    println!("  GET /zones           - Get available zones (JSON)");
-    println!("  GET /now-playing     - Get currently playing tracks (JSON)");
-    println!("  GET /image/:key      - Get album art image");
+
+    // Print routes from the documentation array
+    for (method, path, description) in ROUTES {
+        println!("  {:<6} {:<30} - {}", method, path, description);
+    }
+
     println!("\nPress Ctrl+C to stop the server\n");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
@@ -1809,70 +1835,15 @@ async fn queue_handler(
 }
 
 async fn now_playing_handler(State(state): State<AppState>) -> Json<NowPlayingResponse> {
-    let client = state.roon_client.lock().await;
+    log::debug!("now_playing_handler called");
 
-    let zones = client.get_zones().await;
-    let now_playing: Vec<NowPlayingInfo> = zones.into_iter()
-        .map(|zone| {
-            // Extract track info if available
-            let (track, artist, album, position_seconds, length_seconds, image_key) =
-                if let Some(now_playing) = zone.now_playing.as_ref() {
-                    let three_line = &now_playing.three_line;
-                    (
-                        Some(three_line.line1.clone()),
-                        if !three_line.line2.is_empty() {
-                            Some(three_line.line2.clone())
-                        } else {
-                            None
-                        },
-                        if !three_line.line3.is_empty() {
-                            Some(three_line.line3.clone())
-                        } else {
-                            None
-                        },
-                        now_playing.seek_position,
-                        now_playing.length,
-                        now_playing.image_key.clone(),
-                    )
-                } else {
-                    (None, None, None, None, None, None)
-                };
+    // Use the RoonClient's build_ws_zone_data method which has all the debug logging
+    let now_playing = {
+        let client = state.roon_client.lock().await;
+        client.build_ws_zone_data().await
+    }; // Lock is released here
 
-            // Extract is_muted from the first output with volume info
-            let is_muted = zone.outputs.iter()
-                .find_map(|output| output.volume.as_ref().and_then(|v| v.is_muted));
-
-            // Build zone name with selected output display name
-            let zone_name = if let Some(output) = zone.outputs.first() {
-                // Check if there's a selected source control
-                if let Some(source_controls) = &output.source_controls {
-                    if let Some(selected_source) = source_controls.iter()
-                        .find(|sc| sc.status == roon_api::transport::Status::Selected) {
-                        format!("{} ({})", zone.display_name, selected_source.display_name)
-                    } else {
-                        zone.display_name.clone()
-                    }
-                } else {
-                    zone.display_name.clone()
-                }
-            } else {
-                zone.display_name.clone()
-            };
-
-            NowPlayingInfo {
-                zone_id: zone.zone_id,
-                zone_name,
-                state: format!("{:?}", zone.state),
-                track,
-                artist,
-                album,
-                position_seconds,
-                length_seconds,
-                image_key,
-                is_muted,
-            }
-        })
-        .collect();
+    log::debug!("now_playing_handler returning {} zones", now_playing.len());
 
     let count = now_playing.len();
 
