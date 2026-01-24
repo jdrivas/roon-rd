@@ -302,31 +302,69 @@ pub struct TransportInfo {
     pub current_speed: String,  // Usually "1" for normal playback
 }
 
-/// Parse DIDL-Lite metadata to extract audio format information
-pub fn parse_audio_format(didl_xml: &str) -> Option<AudioFormat> {
-    // This is a simplified parser - would need more robust XML parsing
-    // Look for <res> element attributes
-
+/// Parse DIDL-Lite metadata to extract comprehensive track information
+pub fn parse_track_info(didl_xml: &str) -> Option<TrackInfo> {
     if didl_xml.is_empty() {
         return None;
     }
 
-    // Extract sampleFrequency
+    // Extract track metadata elements (using element content)
+    let title = extract_element(didl_xml, "dc:title")
+        .or_else(|| extract_element(didl_xml, "title"));
+    let artist = extract_element(didl_xml, "upnp:artist")
+        .or_else(|| extract_element(didl_xml, "artist"));
+    let album = extract_element(didl_xml, "upnp:album")
+        .or_else(|| extract_element(didl_xml, "album"));
+    let album_artist = extract_element(didl_xml, "upnp:albumArtist")
+        .or_else(|| extract_element(didl_xml, "albumArtist"));
+    let genre = extract_element(didl_xml, "upnp:genre")
+        .or_else(|| extract_element(didl_xml, "genre"));
+
+    // Extract audio format from <res> element attributes
     let sample_rate = extract_attribute(didl_xml, "sampleFrequency");
     let bits_per_sample = extract_attribute(didl_xml, "bitsPerSample");
     let channels = extract_attribute(didl_xml, "nrAudioChannels");
     let bitrate = extract_attribute(didl_xml, "bitrate");
+    let protocol_info = extract_attribute(didl_xml, "protocolInfo");
+    let duration = extract_attribute(didl_xml, "duration");
 
-    if sample_rate.is_some() || bits_per_sample.is_some() {
-        Some(AudioFormat {
-            sample_rate,
-            bits_per_sample,
-            channels,
-            bitrate,
+    // Only return Some if we have at least some metadata
+    if title.is_some() || artist.is_some() || sample_rate.is_some() {
+        Some(TrackInfo {
+            title,
+            artist,
+            album,
+            album_artist,
+            genre,
+            audio_format: AudioFormat {
+                sample_rate,
+                bits_per_sample,
+                channels,
+                bitrate,
+                protocol_info,
+                duration,
+            },
         })
     } else {
         None
     }
+}
+
+/// Parse DIDL-Lite metadata to extract audio format information
+/// (Kept for backward compatibility)
+pub fn parse_audio_format(didl_xml: &str) -> Option<AudioFormat> {
+    parse_track_info(didl_xml).map(|info| info.audio_format)
+}
+
+/// Comprehensive track information extracted from DIDL-Lite
+#[derive(Debug, Clone)]
+pub struct TrackInfo {
+    pub title: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub album_artist: Option<String>,
+    pub genre: Option<String>,
+    pub audio_format: AudioFormat,
 }
 
 /// Audio format information extracted from DIDL-Lite
@@ -336,6 +374,27 @@ pub struct AudioFormat {
     pub bits_per_sample: Option<String>,
     pub channels: Option<String>,
     pub bitrate: Option<String>,
+    pub protocol_info: Option<String>,
+    pub duration: Option<String>,
+}
+
+/// Helper to extract XML element content
+fn extract_element(xml: &str, element_name: &str) -> Option<String> {
+    // Pattern to match <element>content</element> or <namespace:element>content</namespace:element>
+    let pattern = format!(r#"<{}[^>]*>([^<]*)</{}>|<{}[^>]*>([^<]*)</"#,
+        regex::escape(element_name),
+        regex::escape(element_name),
+        regex::escape(element_name));
+
+    if let Some(caps) = regex::Regex::new(&pattern).ok()?.captures(xml) {
+        // Try first capture group, then second
+        caps.get(1)
+            .or_else(|| caps.get(2))
+            .map(|m| m.as_str().trim().to_string())
+            .filter(|s| !s.is_empty())
+    } else {
+        None
+    }
 }
 
 /// Helper to extract XML attribute value

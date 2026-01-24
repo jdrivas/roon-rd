@@ -2,6 +2,7 @@ mod cli;
 mod server;
 mod roon;
 mod upnp;
+mod dcs;
 mod tui;
 
 use clap::{Parser, Subcommand};
@@ -73,12 +74,13 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
 
     if log_level != LevelFilter::Off {
-        // Configure logging to filter out noisy dependencies
+        // Configure logging to filter out noisy dependencies and show file:line for DEBUG
         let config = ConfigBuilder::new()
             .add_filter_ignore_str("rustyline")  // Ignore rustyline debug messages
             .add_filter_ignore_str("hyper")       // Ignore hyper HTTP client debug messages
             .add_filter_ignore_str("roon_api::moo")  // Ignore roon_api ping messages
             .add_filter_ignore_str("tokio_tungstenite")  // Ignore WebSocket polling messages
+            .set_location_level(LevelFilter::Debug)  // Show file:line for DEBUG level and below
             .build();
 
         CombinedLogger::init(vec![

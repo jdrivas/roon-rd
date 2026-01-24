@@ -12,6 +12,7 @@ use rustyline::validate::Validator;
 use rustyline::Helper;
 use crate::roon::RoonClient;
 use crate::upnp;
+use crate::dcs;
 use simplelog::*;
 use colored::Colorize;
 use chrono::Local;
@@ -38,6 +39,17 @@ impl CommandCompleter {
             "upnp-service".to_string(),
             "upnp-position".to_string(),
             "upnp-state".to_string(),
+            "upnp-playing".to_string(),
+            // dCS API commands
+            "dcs-playing".to_string(),
+            "dcs-format".to_string(),
+            "dcs-settings".to_string(),
+            "dcs-upsampler".to_string(),
+            "dcs-inputs".to_string(),
+            "dcs-playmode".to_string(),
+            "dcs-menu".to_string(),
+            "dcs-set-brightness".to_string(),
+            "dcs-set-display".to_string(),
         ];
 
         if include_roon_commands {
@@ -401,6 +413,18 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
             out.writeln("    upnp-service <url> <service> - Get service description XML (SCPD)".to_string());
             out.writeln("    upnp-position <url> - Get current playback position and metadata".to_string());
             out.writeln("    upnp-state <url>   - Get current playback state (playing/paused/stopped)".to_string());
+            out.writeln("    upnp-playing <url> - Get comprehensive now playing info (state, track, format)".to_string());
+            out.writeln("".to_string());
+            out.writeln("  dCS API Commands:".to_string());
+            out.writeln("    dcs-playing <host>  - Get current playback info (track, artist, album, format)".to_string());
+            out.writeln("    dcs-format <host>   - Get current audio format (sample rate, bit depth, input)".to_string());
+            out.writeln("    dcs-settings <host> - Get device settings (display, sync mode)".to_string());
+            out.writeln("    dcs-upsampler <host> - Get upsampler settings (output rate, filter)".to_string());
+            out.writeln("    dcs-inputs <host>   - Get current and available digital inputs".to_string());
+            out.writeln("    dcs-playmode <host> - Get current playback mode".to_string());
+            out.writeln("    dcs-menu <host> <path> - Browse menu hierarchy".to_string());
+            out.writeln("    dcs-set-brightness <host> <0-15> - Set display brightness".to_string());
+            out.writeln("    dcs-set-display <host> <on|off> - Turn display on/off".to_string());
             out.writeln("".to_string());
             out.writeln("  General:".to_string());
             out.writeln("    verbose            - Toggle verbose logging on/off".to_string());
@@ -536,6 +560,74 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                             Err(e) => return Err(format!("Failed to get transport state: {}", e))
                         }
                     }
+                    "upnp-playing" => {
+                        out.writeln("".to_string());
+                        out.writeln("  Getting now playing information...".to_string());
+                        out.writeln("".to_string());
+
+                        // Get both transport state and position info
+                        let transport_result = upnp::get_transport_info(&arg).await;
+                        let position_result = upnp::get_position_info(&arg).await;
+
+                        match (transport_result, position_result) {
+                            (Ok(transport), Ok(position)) => {
+                                // Show transport state
+                                out.writeln(format!("  Status: {} ({})", transport.current_transport_state, transport.current_transport_status));
+                                out.writeln("".to_string());
+
+                                // Parse and display comprehensive track info
+                                if let Some(track_info) = upnp::parse_track_info(&position.track_metadata) {
+                                    // Track metadata
+                                    if let Some(title) = &track_info.title {
+                                        out.writeln(format!("  Title:  {}", title));
+                                    }
+                                    if let Some(artist) = &track_info.artist {
+                                        out.writeln(format!("  Artist: {}", artist));
+                                    }
+                                    if let Some(album) = &track_info.album {
+                                        out.writeln(format!("  Album:  {}", album));
+                                    }
+                                    if let Some(album_artist) = &track_info.album_artist {
+                                        out.writeln(format!("  Album Artist: {}", album_artist));
+                                    }
+                                    out.writeln("".to_string());
+
+                                    // Position information
+                                    out.writeln("  Playback Position:".to_string());
+                                    out.writeln(format!("    Position: {} / {}", position.rel_time, position.track_duration));
+                                    out.writeln("".to_string());
+
+                                    // Audio format
+                                    let fmt = &track_info.audio_format;
+                                    if fmt.sample_rate.is_some() || fmt.bits_per_sample.is_some() {
+                                        out.writeln("  Audio Format:".to_string());
+                                        if let Some(sr) = &fmt.sample_rate {
+                                            out.writeln(format!("    Sample Rate: {} Hz", sr));
+                                        }
+                                        if let Some(bits) = &fmt.bits_per_sample {
+                                            out.writeln(format!("    Bit Depth:   {} bits", bits));
+                                        }
+                                        if let Some(ch) = &fmt.channels {
+                                            out.writeln(format!("    Channels:    {}", ch));
+                                        }
+                                        if let Some(br) = &fmt.bitrate {
+                                            out.writeln(format!("    Bitrate:     {} bps", br));
+                                        }
+                                        if let Some(proto) = &fmt.protocol_info {
+                                            out.writeln(format!("    Protocol:    {}", proto));
+                                        }
+                                        out.writeln("".to_string());
+                                    }
+                                } else {
+                                    out.writeln("  No track metadata available".to_string());
+                                    out.writeln("".to_string());
+                                }
+                                return Ok(());
+                            }
+                            (Err(e), _) => return Err(format!("Failed to get transport state: {}", e)),
+                            (_, Err(e)) => return Err(format!("Failed to get position info: {}", e)),
+                        }
+                    }
                     "upnp-service" => {
                         // Need at least 3 parts: command, url, service_type
                         if parts.len() < 3 {
@@ -566,6 +658,373 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                                 return Ok(());
                             }
                             Err(e) => return Err(format!("Failed to get service description: {}", e))
+                        }
+                    }
+                    "dcs-playing" => {
+                        // Get dCS playback information
+                        // Usage: dcs-playing <host>
+                        // Example: dcs-playing dcs-vivaldi.local
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-playing <host>\n\nExample: dcs-playing dcs-vivaldi.local\n       dcs-playing 192.168.50.31".to_string());
+                        }
+
+                        let host = parts[1];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Getting playback info from {}...", host));
+                        out.writeln("".to_string());
+
+                        match dcs::get_playback_info(host).await {
+                            Ok(info) => {
+                                // Show playback state
+                                if let Some(state) = &info.state {
+                                    out.writeln(format!("  State: {}", state));
+                                    out.writeln("".to_string());
+                                }
+
+                                // Show track metadata
+                                if let Some(title) = &info.title {
+                                    out.writeln(format!("  Title:  {}", title));
+                                }
+                                if let Some(artist) = &info.artist {
+                                    out.writeln(format!("  Artist: {}", artist));
+                                }
+                                if let Some(album) = &info.album {
+                                    out.writeln(format!("  Album:  {}", album));
+                                }
+                                if let Some(service) = &info.service_id {
+                                    out.writeln(format!("  Source: {}", service));
+                                }
+                                out.writeln("".to_string());
+
+                                // Show audio format
+                                if let Some(format) = &info.audio_format {
+                                    out.writeln("  Audio Format:".to_string());
+                                    if let Some(sr) = format.sample_frequency {
+                                        out.writeln(format!("    Sample Rate: {} Hz ({} kHz)", sr, sr / 1000));
+                                    }
+                                    if let Some(bits) = format.bits_per_sample {
+                                        out.writeln(format!("    Bit Depth:   {} bits", bits));
+                                    }
+                                    if let Some(ch) = format.nr_audio_channels {
+                                        out.writeln(format!("    Channels:    {}", ch));
+                                    }
+                                    out.writeln("".to_string());
+                                }
+
+                                // Show duration
+                                if let Some(duration) = info.duration {
+                                    let mins = duration / 60000;
+                                    let secs = (duration % 60000) / 1000;
+                                    out.writeln(format!("  Duration: {}:{:02}", mins, secs));
+                                    out.writeln("".to_string());
+                                }
+
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to get playback info: {}", e))
+                        }
+                    }
+                    "dcs-format" => {
+                        // Get dCS audio format information
+                        // Usage: dcs-format <host>
+                        // Example: dcs-format dcs-vivaldi.local
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-format <host>\n\nExample: dcs-format dcs-vivaldi.local\n       dcs-format 192.168.50.31".to_string());
+                        }
+
+                        let host = parts[1];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Getting audio format from {}...", host));
+                        out.writeln("".to_string());
+
+                        match dcs::get_audio_format(host).await {
+                            Ok(format) => {
+                                out.writeln("  Current Audio Format:".to_string());
+                                out.writeln("".to_string());
+
+                                if let Some(sr) = format.sample_rate {
+                                    out.writeln(format!("    Sample Rate: {} Hz ({} kHz)", sr, sr / 1000));
+                                }
+                                if let Some(bits) = format.bit_depth {
+                                    out.writeln(format!("    Bit Depth:   {} bits", bits));
+                                }
+                                if let Some(mode) = &format.input_mode {
+                                    out.writeln(format!("    Input Mode:  {}", mode));
+                                }
+
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to get audio format: {}", e))
+                        }
+                    }
+                    "dcs-settings" => {
+                        // Get dCS device settings
+                        // Usage: dcs-settings <host>
+                        // Example: dcs-settings dcs-vivaldi.local
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-settings <host>\n\nExample: dcs-settings dcs-vivaldi.local\n       dcs-settings 192.168.50.31".to_string());
+                        }
+
+                        let host = parts[1];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Getting device settings from {}...", host));
+                        out.writeln("".to_string());
+
+                        match dcs::get_device_settings(host).await {
+                            Ok(settings) => {
+                                out.writeln("  Device Settings:".to_string());
+                                out.writeln("".to_string());
+
+                                if let Some(brightness) = settings.display_brightness {
+                                    out.writeln(format!("    Display Brightness: {}", brightness));
+                                }
+                                if let Some(off) = settings.display_off {
+                                    out.writeln(format!("    Display Off: {}", off));
+                                }
+                                if let Some(sync) = &settings.sync_mode {
+                                    out.writeln(format!("    Sync Mode: {}", sync));
+                                }
+
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to get device settings: {}", e))
+                        }
+                    }
+                    "dcs-upsampler" => {
+                        // Get dCS upsampler settings
+                        // Usage: dcs-upsampler <host>
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-upsampler <host>\n\nExample: dcs-upsampler dcs-vivaldi.local\n       dcs-upsampler 192.168.50.31".to_string());
+                        }
+
+                        let host = parts[1];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Getting upsampler settings from {}...", host));
+                        out.writeln("".to_string());
+
+                        match dcs::get_upsampler_settings(host).await {
+                            Ok(settings) => {
+                                out.writeln("  Upsampler Settings:".to_string());
+                                out.writeln("".to_string());
+
+                                if let Some(rate) = settings.output_sample_rate {
+                                    // Format the sample rate nicely
+                                    let formatted = if rate >= 2822400 {
+                                        // DSD rates
+                                        let dsd_multiple = rate / 2822400;
+                                        format!("{} Hz (DSD{} / {:.4} MHz)", rate, dsd_multiple * 64, rate as f64 / 1_000_000.0)
+                                    } else if rate >= 1000000 {
+                                        format!("{} Hz ({:.2} MHz)", rate, rate as f64 / 1_000_000.0)
+                                    } else if rate >= 1000 {
+                                        format!("{} Hz ({} kHz)", rate, rate / 1000)
+                                    } else {
+                                        format!("{} Hz", rate)
+                                    };
+                                    out.writeln(format!("    Output Rate: {}", formatted));
+                                }
+                                if let Some(filter) = settings.filter {
+                                    out.writeln(format!("    Filter: {}", filter));
+                                }
+
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to get upsampler settings: {}", e))
+                        }
+                    }
+                    "dcs-inputs" => {
+                        // Get dCS digital inputs
+                        // Usage: dcs-inputs <host>
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-inputs <host>\n\nExample: dcs-inputs dcs-vivaldi.local\n       dcs-inputs 192.168.50.31".to_string());
+                        }
+
+                        let host = parts[1];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Getting digital inputs from {}...", host));
+                        out.writeln("".to_string());
+
+                        match dcs::get_input_info(host).await {
+                            Ok(info) => {
+                                if let Some(current) = &info.current_input {
+                                    out.writeln(format!("  Current Input: {}", current));
+                                    out.writeln("".to_string());
+                                }
+
+                                out.writeln("  Available Inputs:".to_string());
+                                for input in &info.available_inputs {
+                                    let marker = if Some(input) == info.current_input.as_ref() { " *" } else { "" };
+                                    out.writeln(format!("    - {}{}", input, marker));
+                                }
+
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to get input info: {}", e))
+                        }
+                    }
+                    "dcs-playmode" => {
+                        // Get dCS play mode
+                        // Usage: dcs-playmode <host>
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-playmode <host>\n\nExample: dcs-playmode dcs-vivaldi.local\n       dcs-playmode 192.168.50.31".to_string());
+                        }
+
+                        let host = parts[1];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Getting play mode from {}...", host));
+                        out.writeln("".to_string());
+
+                        match dcs::get_play_mode(host).await {
+                            Ok(mode_info) => {
+                                if let Some(mode) = &mode_info.mode {
+                                    out.writeln(format!("  Play Mode: {}", mode));
+                                } else {
+                                    out.writeln("  Play Mode: (unknown)".to_string());
+                                }
+
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to get play mode: {}", e))
+                        }
+                    }
+                    "dcs-menu" => {
+                        // Browse dCS menu hierarchy
+                        // Usage: dcs-menu <host> <path>
+                        let parts: Vec<&str> = query_type.splitn(3, ' ').collect();
+
+                        if parts.len() < 3 {
+                            return Err("Usage: dcs-menu <host> <path>\n\nExamples:\n  dcs-menu dcs-vivaldi.local dcsUiMenu:/ui/settings/audio\n  dcs-menu 192.168.50.31 dcsUiMenu:/ui/settings/frontPanel".to_string());
+                        }
+
+                        let host = parts[1];
+                        let path = parts[2];
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Browsing menu: {}...", path));
+                        out.writeln("".to_string());
+
+                        match dcs::get_menu(host, path).await {
+                            Ok(menu) => {
+                                out.writeln(format!("  Menu: {}", menu.title));
+                                out.writeln(format!("  Path: {}", menu.path));
+                                out.writeln("".to_string());
+
+                                if menu.items.is_empty() {
+                                    out.writeln("  (No items)".to_string());
+                                } else {
+                                    out.writeln("  Items:".to_string());
+                                    for (idx, item) in menu.items.iter().enumerate() {
+                                        let type_marker = match item.item_type.as_str() {
+                                            "container" => " →",
+                                            "value" => "",
+                                            _ => &format!(" ({})", item.item_type),
+                                        };
+
+                                        if let Some(ref value) = item.value {
+                                            // Format value based on type
+                                            let value_str = if let Some(i32_val) = value.get("i32_").and_then(|v| v.as_i64()) {
+                                                format!(": {}", i32_val)
+                                            } else if let Some(str_val) = value.get("string_").and_then(|v| v.as_str()) {
+                                                format!(": {}", str_val)
+                                            } else if let Some(bool_val) = value.get("bool_").and_then(|v| v.as_bool()) {
+                                                format!(": {}", bool_val)
+                                            } else {
+                                                String::new()
+                                            };
+                                            out.writeln(format!("    {}. {}{}{}", idx + 1, item.title, type_marker, value_str));
+                                        } else {
+                                            out.writeln(format!("    {}. {}{}", idx + 1, item.title, type_marker));
+                                        }
+                                    }
+                                }
+
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to browse menu: {}", e))
+                        }
+                    }
+                    "dcs-set-brightness" => {
+                        // Set dCS display brightness
+                        // Usage: dcs-set-brightness <host> <0-15>
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 3 {
+                            return Err("Usage: dcs-set-brightness <host> <0-15>\n\nExample: dcs-set-brightness dcs-vivaldi.local 10\n       dcs-set-brightness 192.168.50.31 5".to_string());
+                        }
+
+                        let host = parts[1];
+                        let brightness_str = parts[2];
+
+                        // Parse brightness value
+                        let brightness: i32 = brightness_str.parse()
+                            .map_err(|_| format!("Invalid brightness value '{}'. Must be a number between 0 and 15.", brightness_str))?;
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Setting display brightness to {}...", brightness));
+                        out.writeln("".to_string());
+
+                        match dcs::set_display_brightness(host, brightness).await {
+                            Ok(_) => {
+                                out.writeln("  ✓ Display brightness updated successfully".to_string());
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to set brightness: {}", e))
+                        }
+                    }
+                    "dcs-set-display" => {
+                        // Set dCS display on/off
+                        // Usage: dcs-set-display <host> <on|off>
+                        let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+                        if parts.len() < 3 {
+                            return Err("Usage: dcs-set-display <host> <on|off>\n\nExample: dcs-set-display dcs-vivaldi.local off\n       dcs-set-display 192.168.50.31 on".to_string());
+                        }
+
+                        let host = parts[1];
+                        let state_str = parts[2].to_lowercase();
+
+                        // Parse on/off state
+                        let display_off = match state_str.as_str() {
+                            "off" => true,
+                            "on" => false,
+                            _ => return Err(format!("Invalid display state '{}'. Must be 'on' or 'off'.", state_str))
+                        };
+
+                        out.writeln("".to_string());
+                        out.writeln(format!("  Turning display {}...", if display_off { "off" } else { "on" }));
+                        out.writeln("".to_string());
+
+                        match dcs::set_display_off(host, display_off).await {
+                            Ok(_) => {
+                                out.writeln(format!("  ✓ Display turned {} successfully", if display_off { "off" } else { "on" }));
+                                out.writeln("".to_string());
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to set display: {}", e))
                         }
                     }
                     _ => {}
@@ -989,6 +1448,17 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
         "upnp-service".to_string(),
         "upnp-position".to_string(),
         "upnp-state".to_string(),
+        "upnp-playing".to_string(),
+        // dCS API commands
+        "dcs-playing".to_string(),
+        "dcs-format".to_string(),
+        "dcs-settings".to_string(),
+        "dcs-upsampler".to_string(),
+        "dcs-inputs".to_string(),
+        "dcs-playmode".to_string(),
+        "dcs-menu".to_string(),
+        "dcs-set-brightness".to_string(),
+        "dcs-set-display".to_string(),
     ];
 
     if client.is_some() {
