@@ -1475,6 +1475,13 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
     }
     commands.sort();
 
+    // Get WebSocket receiver if we have a client
+    let ws_rx = if let Some(ref client) = client {
+        Some(client.lock().await.subscribe_ws())
+    } else {
+        None
+    };
+
     // Run TUI with async command handler
     tui::run_tui_async(message_buffer, prompt_fn, move |command| {
         let buffer_for_commands = buffer_for_commands.clone();
@@ -1597,7 +1604,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                 buffer.push("".to_string());
             }
         }
-    }, exit_flag, commands).await?;
+    }, exit_flag, commands, ws_rx).await?;
 
     Ok(())
 }

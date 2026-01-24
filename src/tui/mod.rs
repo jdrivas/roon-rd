@@ -94,6 +94,102 @@ impl MessageBuffer {
     }
 }
 
+/// Shared event buffer for Roon events
+pub struct EventBuffer {
+    events: Vec<String>,
+    max_events: usize,
+}
+
+impl EventBuffer {
+    pub fn new(max_events: usize) -> Self {
+        Self {
+            events: Vec::new(),
+            max_events,
+        }
+    }
+
+    pub fn push(&mut self, event: String) {
+        self.events.push(event);
+        if self.events.len() > self.max_events {
+            self.events.remove(0);
+        }
+    }
+
+    pub fn events(&self) -> &[String] {
+        &self.events
+    }
+
+    pub fn clear(&mut self) {
+        self.events.clear();
+    }
+}
+
+/// Zone display information
+#[derive(Clone, Debug)]
+pub struct ZoneDisplay {
+    pub zone_id: String,
+    pub zone_name: String,
+    pub state: String,
+    pub track: Option<String>,
+    pub artist: Option<String>,
+    pub album: Option<String>,
+    pub format: Option<String>,
+    pub position_seconds: Option<i64>,
+    pub length_seconds: Option<u32>,
+}
+
+/// Zone display buffer
+pub struct ZoneBuffer {
+    zones: Vec<ZoneDisplay>,
+}
+
+impl ZoneBuffer {
+    pub fn new() -> Self {
+        Self {
+            zones: Vec::new(),
+        }
+    }
+
+    pub fn update(&mut self, zones: Vec<ZoneDisplay>) {
+        self.zones = zones;
+    }
+
+    pub fn update_position(&mut self, zone_id: &str, position_seconds: Option<i64>) {
+        if let Some(zone) = self.zones.iter_mut().find(|z| z.zone_id == zone_id) {
+            zone.position_seconds = position_seconds;
+        }
+    }
+
+    pub fn zones(&self) -> &[ZoneDisplay] {
+        &self.zones
+    }
+}
+
+/// Format seconds as MM:SS or HH:MM:SS if >= 1 hour
+fn format_time(seconds: i64) -> String {
+    let abs_seconds = seconds.abs();
+    let hours = abs_seconds / 3600;
+    let minutes = (abs_seconds % 3600) / 60;
+    let secs = abs_seconds % 60;
+
+    if hours > 0 {
+        format!("{}:{:02}:{:02}", hours, minutes, secs)
+    } else {
+        format!("{}:{:02}", minutes, secs)
+    }
+}
+
+/// Get priority for zone state sorting (lower = higher priority)
+fn get_state_priority(state: &str) -> u8 {
+    match state {
+        "playing" => 0,
+        "loading" => 1,
+        "paused" => 2,
+        "stopped" => 3,
+        _ => 4,
+    }
+}
+
 /// Custom logger that writes to the TUI message buffer
 pub struct TuiLogger {
     buffer: Arc<StdMutex<MessageBuffer>>,
@@ -164,6 +260,15 @@ impl SharedLogger for TuiLogger {
     }
 }
 
+/// Which window is currently maximized
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum MaximizedWindow {
+    None,
+    Zones,
+    Events,
+    Output,
+}
+
 /// Terminal UI application state
 pub struct App {
     /// Current input string
@@ -172,6 +277,10 @@ pub struct App {
     cursor_position: usize,
     /// Message buffer (shared with logger)
     message_buffer: Arc<StdMutex<MessageBuffer>>,
+    /// Zone buffer for current zone states
+    zone_buffer: Option<Arc<StdMutex<ZoneBuffer>>>,
+    /// Event buffer for Roon events
+    event_buffer: Option<Arc<StdMutex<EventBuffer>>>,
     /// Command history
     history: Vec<String>,
     /// Current position in history (None = not browsing)
@@ -182,14 +291,20 @@ pub struct App {
     prompt_fn: Arc<StdMutex<Box<dyn Fn() -> String + Send>>>,
     /// Scroll offset from the bottom (0 = at bottom/auto-scroll, >0 = scrolled up)
     scroll_offset: usize,
-    /// Scrollbar state
+    /// Scrollbar state for output
     scrollbar_state: ScrollbarState,
+    /// Scrollbar state for events
+    event_scrollbar_state: ScrollbarState,
+    /// Event scroll offset
+    event_scroll_offset: usize,
     /// Available commands for completion
     commands: Vec<String>,
     /// Current completion candidates
     completion_candidates: Vec<String>,
     /// Current position in completion candidates
     completion_index: Option<usize>,
+    /// Which window is currently maximized
+    maximized_window: MaximizedWindow,
 }
 
 impl App {
@@ -204,16 +319,29 @@ impl App {
             input: String::new(),
             cursor_position: 0,
             message_buffer,
+            zone_buffer: None,
+            event_buffer: None,
             history,
             history_position: None,
             should_exit: false,
             prompt_fn: Arc::new(StdMutex::new(Box::new(prompt_fn))),
             scroll_offset: 0,
             scrollbar_state: ScrollbarState::default(),
+            event_scrollbar_state: ScrollbarState::default(),
+            event_scroll_offset: 0,
             commands,
             completion_candidates: Vec::new(),
             completion_index: None,
+            maximized_window: MaximizedWindow::None,
         }
+    }
+
+    pub fn set_zone_buffer(&mut self, zone_buffer: Arc<StdMutex<ZoneBuffer>>) {
+        self.zone_buffer = Some(zone_buffer);
+    }
+
+    pub fn set_event_buffer(&mut self, event_buffer: Arc<StdMutex<EventBuffer>>) {
+        self.event_buffer = Some(event_buffer);
     }
 
     fn get_prompt(&self) -> String {
@@ -275,6 +403,14 @@ impl App {
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
         match (key.code, key.modifiers) {
+            // ESC - restore normal layout if maximized
+            (KeyCode::Esc, _) => {
+                if self.maximized_window != MaximizedWindow::None {
+                    self.maximized_window = MaximizedWindow::None;
+                }
+                self.reset_completion();
+                None
+            }
             // Ctrl+C or Ctrl+D - exit
             (KeyCode::Char('c'), KeyModifiers::CONTROL) | (KeyCode::Char('d'), KeyModifiers::CONTROL) => {
                 self.should_exit = true;
@@ -407,6 +543,20 @@ impl App {
                 self.reset_completion();
                 None
             }
+            (KeyCode::Up, KeyModifiers::ALT) => {
+                // Alt+Up: Scroll up in events
+                if let Some(ref event_buffer) = self.event_buffer {
+                    let events = event_buffer.lock().unwrap();
+                    // Count total lines (split multi-line events)
+                    let total_lines: usize = events.events().iter()
+                        .map(|evt| evt.lines().count())
+                        .sum();
+                    if self.event_scroll_offset < total_lines.saturating_sub(1) {
+                        self.event_scroll_offset += 1;
+                    }
+                }
+                None
+            }
             (KeyCode::Up, _) => {
                 // Scroll up in output
                 let messages = self.message_buffer.lock().unwrap();
@@ -432,6 +582,13 @@ impl App {
                     }
                 }
                 self.reset_completion();
+                None
+            }
+            (KeyCode::Down, KeyModifiers::ALT) => {
+                // Alt+Down: Scroll down in events
+                if self.event_scroll_offset > 0 {
+                    self.event_scroll_offset -= 1;
+                }
                 None
             }
             (KeyCode::Down, _) => {
@@ -466,30 +623,362 @@ impl App {
         }
     }
 
+    /// Handle mouse events
+    pub fn handle_mouse(&mut self, mouse_event: event::MouseEvent, zone_area: Option<Rect>, event_area: Option<Rect>, output_area: Option<Rect>) {
+        use event::MouseEventKind;
+
+        // Only handle left clicks
+        if mouse_event.kind != MouseEventKind::Down(event::MouseButton::Left) {
+            return;
+        }
+
+        let row = mouse_event.row;
+        let col = mouse_event.column;
+
+        // Check if click is on zones window title
+        if let Some(zone_rect) = zone_area {
+            if row == zone_rect.y && col >= zone_rect.x && col < zone_rect.x + zone_rect.width {
+                // Toggle maximized state
+                self.maximized_window = if self.maximized_window == MaximizedWindow::Zones {
+                    MaximizedWindow::None
+                } else {
+                    MaximizedWindow::Zones
+                };
+                return;
+            }
+        }
+
+        // Check if click is on events window title (if events exist)
+        if let Some(event_rect) = event_area {
+            // Title is on top border (y position)
+            if row == event_rect.y && col >= event_rect.x && col < event_rect.x + event_rect.width {
+                // Toggle maximized state
+                self.maximized_window = if self.maximized_window == MaximizedWindow::Events {
+                    MaximizedWindow::None
+                } else {
+                    MaximizedWindow::Events
+                };
+                return;
+            }
+        }
+
+        // Check if click is on output window title
+        if let Some(output_rect) = output_area {
+            if row == output_rect.y && col >= output_rect.x && col < output_rect.x + output_rect.width {
+                // Toggle maximized state
+                self.maximized_window = if self.maximized_window == MaximizedWindow::Output {
+                    MaximizedWindow::None
+                } else {
+                    MaximizedWindow::Output
+                };
+                return;
+            }
+        }
+    }
+
     pub fn should_exit(&self) -> bool {
         self.should_exit
     }
 
     /// Render the UI
-    pub fn render(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<()> {
+    /// Returns the zone, event and output area Rects for mouse click detection
+    pub fn render(&mut self, terminal: &mut Terminal<CrosstermBackend<io::Stdout>>) -> io::Result<(Option<Rect>, Option<Rect>, Option<Rect>)> {
+        let mut zone_area: Option<Rect> = None;
+        let mut event_area: Option<Rect> = None;
+        let mut output_area: Option<Rect> = None;
+
         terminal.draw(|f| {
-            // Split terminal into two areas: messages (top) and input (bottom)
-            let chunks = Layout::default()
-                .direction(Direction::Vertical)
-                .constraints([
-                    Constraint::Min(1),      // Messages area (takes remaining space)
-                    Constraint::Length(3),   // Input area (fixed 3 lines: border + input + border)
-                ])
-                .split(f.area());
+            // Determine if we have zones to display
+            let has_zones = self.zone_buffer.is_some();
+            let has_events = self.event_buffer.is_some();
 
-            // Render messages area with scrolling support
-            let messages = self.message_buffer.lock().unwrap();
-            let all_messages = messages.messages();
-            let total_messages = all_messages.len();
+            // Split terminal based on maximized state and available windows
+            let chunks = match self.maximized_window {
+                MaximizedWindow::Zones => {
+                    // Zones maximized
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Min(1),        // Zones area (takes all space)
+                            Constraint::Length(3),     // Input area (fixed 3 lines)
+                        ])
+                        .split(f.area())
+                }
+                MaximizedWindow::Events => {
+                    // Events maximized: events (almost full), input (bottom)
+                    Layout::default()
+                        .direction(Direction::Vertical)
+                        .constraints([
+                            Constraint::Min(1),        // Events area (takes all space)
+                            Constraint::Length(3),     // Input area (fixed 3 lines)
+                        ])
+                        .split(f.area())
+                }
+                MaximizedWindow::Output => {
+                    if self.event_buffer.is_some() {
+                        // Output maximized: output (almost full), input (bottom)
+                        // Events window hidden
+                        Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Min(1),        // Output area (takes all space)
+                                Constraint::Length(3),     // Input area (fixed 3 lines)
+                            ])
+                            .split(f.area())
+                    } else {
+                        // No events, same as normal 2-pane
+                        Layout::default()
+                            .direction(Direction::Vertical)
+                            .constraints([
+                                Constraint::Min(1),
+                                Constraint::Length(3),
+                            ])
+                            .split(f.area())
+                    }
+                }
+                MaximizedWindow::None => {
+                    // Normal layout - varies based on what windows we have
+                    match (has_zones, has_events) {
+                        (true, true) => {
+                            // 4-pane layout: zones, events, output, input
+                            Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([
+                                    Constraint::Length(5),       // Zones area (5 lines per zone + borders)
+                                    Constraint::Percentage(25),  // Events area (25%)
+                                    Constraint::Min(1),          // Output area (remaining)
+                                    Constraint::Length(3),       // Input area
+                                ])
+                                .split(f.area())
+                        }
+                        (true, false) => {
+                            // 3-pane layout: zones, output, input
+                            Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([
+                                    Constraint::Length(5),   // Zones area
+                                    Constraint::Min(1),      // Output area
+                                    Constraint::Length(3),   // Input area
+                                ])
+                                .split(f.area())
+                        }
+                        (false, true) => {
+                            // 3-pane layout: events, output, input
+                            Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([
+                                    Constraint::Percentage(30),  // Events area
+                                    Constraint::Min(1),          // Output area
+                                    Constraint::Length(3),       // Input area
+                                ])
+                                .split(f.area())
+                        }
+                        (false, false) => {
+                            // 2-pane layout: output, input
+                            Layout::default()
+                                .direction(Direction::Vertical)
+                                .constraints([
+                                    Constraint::Min(1),      // Output area
+                                    Constraint::Length(3),   // Input area
+                                ])
+                                .split(f.area())
+                        }
+                    }
+                }
+            };
 
-            // Calculate how many lines can fit in the output area
-            // chunks[0].height - 2 for borders
-            let available_height = chunks[0].height.saturating_sub(2) as usize;
+            // Render zones window if available and not hidden
+            if let Some(ref zone_buffer) = self.zone_buffer {
+                if self.maximized_window != MaximizedWindow::Events && self.maximized_window != MaximizedWindow::Output {
+                    let zones = zone_buffer.lock().unwrap();
+                    let zone_list = zones.zones();
+
+                    // Format zones as lines
+                    let zone_lines: Vec<Line> = if zone_list.is_empty() {
+                        vec![Line::from("No zones available")]
+                    } else {
+                        let zone_width = chunks[0].width.saturating_sub(2) as usize; // Account for borders
+
+                        zone_list.iter().flat_map(|z| {
+                            // Format the position counter
+                            let position_str = if let (Some(pos), Some(len)) = (z.position_seconds, z.length_seconds) {
+                                format!("{} / {}", format_time(pos), format_time(len as i64))
+                            } else {
+                                String::new()
+                            };
+
+                            // Create zone title line: <zone-name>      <state>      <position>
+                            // The state should be centered at the window midpoint
+                            let zone_title = format!("Zone: {}", z.zone_name);
+                            let state_str = z.state.clone();
+
+                            let title_line = if zone_width > 0 {
+                                // Calculate where the middle of the state should be (at window midpoint)
+                                let window_midpoint = zone_width / 2;
+                                let state_len = state_str.len();
+                                let state_midpoint = state_len / 2;
+
+                                // Calculate where state should start to center it
+                                let state_start = if window_midpoint >= state_midpoint {
+                                    window_midpoint - state_midpoint
+                                } else {
+                                    0
+                                };
+
+                                // Build the line with state centered
+                                let mut line = String::new();
+
+                                // Add zone title on the left
+                                line.push_str(&zone_title);
+
+                                // Add spacing to position state at center
+                                if state_start > zone_title.len() {
+                                    let padding = state_start - zone_title.len();
+                                    line.push_str(&" ".repeat(padding));
+                                    line.push_str(&state_str);
+                                } else {
+                                    // Not enough room to center state after zone title, add minimal spacing
+                                    line.push_str("  ");
+                                    line.push_str(&state_str);
+                                }
+
+                                // Add position on the right if available
+                                if !position_str.is_empty() {
+                                    let current_len = line.len();
+                                    if current_len + 2 + position_str.len() <= zone_width {
+                                        // Calculate padding to right-justify position
+                                        let padding = zone_width - current_len - position_str.len();
+                                        line.push_str(&" ".repeat(padding));
+                                        line.push_str(&position_str);
+                                    } else if current_len + position_str.len() + 1 <= zone_width {
+                                        // Minimal spacing
+                                        line.push(' ');
+                                        line.push_str(&position_str);
+                                    }
+                                }
+
+                                line
+                            } else {
+                                zone_title
+                            };
+
+                            vec![
+                                Line::from(title_line),
+                                Line::from(format!("  Track: {}  |  Artist: {}  |  Album: {}  |  Format: {}",
+                                    z.track.as_deref().unwrap_or("-"),
+                                    z.artist.as_deref().unwrap_or("-"),
+                                    z.album.as_deref().unwrap_or("-"),
+                                    z.format.as_deref().unwrap_or("-")
+                                )),
+                            ]
+                        }).collect()
+                    };
+
+                    let zones_widget = Paragraph::new(zone_lines)
+                        .block(Block::default().borders(Borders::ALL).title("Zones"))
+                        .style(Style::default().fg(Color::Cyan))
+                        .wrap(Wrap { trim: false });
+                    f.render_widget(zones_widget, chunks[0]);
+
+                    // Store zone area for mouse click detection
+                    zone_area = Some(chunks[0]);
+                }
+            }
+
+            // Render events area if available and not hidden (when output or zones maximized)
+            if let Some(ref event_buffer) = self.event_buffer {
+                if self.maximized_window != MaximizedWindow::Output && self.maximized_window != MaximizedWindow::Zones {
+                let events = event_buffer.lock().unwrap();
+                let all_events = events.events();
+
+                // Determine events chunk index based on layout
+                let events_chunk_idx = match self.maximized_window {
+                    MaximizedWindow::Events => 0,
+                    _ => if has_zones { 1 } else { 0 }
+                };
+
+                let available_height = chunks[events_chunk_idx].height.saturating_sub(2) as usize;
+
+                // Split events by newlines to handle multi-line debug output
+                let all_event_lines: Vec<String> = all_events
+                    .iter()
+                    .flat_map(|evt| evt.lines().map(|line| line.to_string()))
+                    .collect();
+                let total_event_lines = all_event_lines.len();
+
+                let (visible_events, event_scroll_position) = if total_event_lines == 0 {
+                    (Vec::new(), 0)
+                } else if self.event_scroll_offset == 0 {
+                    let start = total_event_lines.saturating_sub(available_height);
+                    let evts: Vec<Line> = all_event_lines[start..]
+                        .iter()
+                        .map(|line| Line::from(line.clone()))
+                        .collect();
+                    (evts, total_event_lines.saturating_sub(1))
+                } else {
+                    let end_index = total_event_lines.saturating_sub(self.event_scroll_offset);
+                    let start_index = end_index.saturating_sub(available_height);
+                    let evts: Vec<Line> = all_event_lines[start_index..end_index]
+                        .iter()
+                        .map(|line| Line::from(line.clone()))
+                        .collect();
+                    (evts, end_index.saturating_sub(1))
+                };
+
+                self.event_scrollbar_state = self.event_scrollbar_state
+                    .content_length(total_event_lines)
+                    .position(event_scroll_position);
+
+                let event_title = if self.event_scroll_offset > 0 {
+                    format!("Roon Events (↑{} lines, Alt+↑/↓ to scroll)", self.event_scroll_offset)
+                } else {
+                    "Roon Events (Alt+↑/↓ to scroll)".to_string()
+                };
+                let events_widget = Paragraph::new(visible_events)
+                    .block(Block::default().borders(Borders::ALL).title(event_title))
+                    .style(Style::default().fg(Color::Green))
+                    .wrap(Wrap { trim: false });
+                f.render_widget(events_widget, chunks[events_chunk_idx]);
+
+                let event_scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
+                    .begin_symbol(Some("↑"))
+                    .end_symbol(Some("↓"));
+                let event_scrollbar_area = Rect {
+                    x: chunks[events_chunk_idx].x + chunks[events_chunk_idx].width - 1,
+                    y: chunks[events_chunk_idx].y + 1,
+                    width: 1,
+                    height: chunks[events_chunk_idx].height.saturating_sub(2),
+                };
+                f.render_stateful_widget(event_scrollbar, event_scrollbar_area, &mut self.event_scrollbar_state);
+
+                // Store event area for mouse click detection
+                event_area = Some(chunks[events_chunk_idx]);
+                }
+            }
+
+            // Determine output chunk index based on maximized state and available windows
+            let (output_chunk_idx, input_chunk_idx) = match self.maximized_window {
+                MaximizedWindow::Zones => (usize::MAX, 1),   // Output hidden when zones maximized
+                MaximizedWindow::Events => (usize::MAX, 1),  // Output hidden when events maximized
+                MaximizedWindow::Output => (0, 1),           // Output at top when maximized
+                MaximizedWindow::None => {
+                    match (has_zones, has_events) {
+                        (true, true) => (2, 3),   // 4-pane: zones=0, events=1, output=2, input=3
+                        (true, false) => (1, 2),  // 3-pane: zones=0, output=1, input=2
+                        (false, true) => (1, 2),  // 3-pane: events=0, output=1, input=2
+                        (false, false) => (0, 1), // 2-pane: output=0, input=1
+                    }
+                }
+            };
+
+            // Render messages area with scrolling support (skip if events or zones maximized)
+            if self.maximized_window != MaximizedWindow::Events && self.maximized_window != MaximizedWindow::Zones {
+                let messages = self.message_buffer.lock().unwrap();
+                let all_messages = messages.messages();
+                let total_messages = all_messages.len();
+
+                // Calculate how many lines can fit in the output area
+                let available_height = chunks[output_chunk_idx].height.saturating_sub(2) as usize;
 
             // Calculate which messages to show based on scroll_offset
             let (visible_messages, scroll_position) = if total_messages == 0 {
@@ -528,19 +1017,23 @@ impl App {
             let messages_widget = Paragraph::new(visible_messages)
                 .block(Block::default().borders(Borders::ALL).title(title))
                 .wrap(Wrap { trim: false });
-            f.render_widget(messages_widget, chunks[0]);
+            f.render_widget(messages_widget, chunks[output_chunk_idx]);
 
             // Render scrollbar
             let scrollbar = Scrollbar::new(ScrollbarOrientation::VerticalRight)
                 .begin_symbol(Some("↑"))
                 .end_symbol(Some("↓"));
             let scrollbar_area = Rect {
-                x: chunks[0].x + chunks[0].width - 1,
-                y: chunks[0].y + 1,
+                x: chunks[output_chunk_idx].x + chunks[output_chunk_idx].width - 1,
+                y: chunks[output_chunk_idx].y + 1,
                 width: 1,
-                height: chunks[0].height.saturating_sub(2),
+                height: chunks[output_chunk_idx].height.saturating_sub(2),
             };
             f.render_stateful_widget(scrollbar, scrollbar_area, &mut self.scrollbar_state);
+
+                // Store output area for mouse click detection
+                output_area = Some(chunks[output_chunk_idx]);
+            }
 
             // Render input area
             let prompt = self.get_prompt();
@@ -551,15 +1044,15 @@ impl App {
 
             let input_widget = Paragraph::new(input_text)
                 .block(Block::default().borders(Borders::ALL).title("Input"));
-            f.render_widget(input_widget, chunks[1]);
+            f.render_widget(input_widget, chunks[input_chunk_idx]);
 
             // Set cursor position
             f.set_cursor_position((
-                chunks[1].x + prompt.len() as u16 + self.cursor_position as u16 + 1,
-                chunks[1].y + 1,
+                chunks[input_chunk_idx].x + prompt.len() as u16 + self.cursor_position as u16 + 1,
+                chunks[input_chunk_idx].y + 1,
             ));
         })?;
-        Ok(())
+        Ok((zone_area, event_area, output_area))
     }
 }
 
@@ -570,6 +1063,7 @@ pub async fn run_tui_async<F, Fut, P>(
     command_handler: F,
     exit_flag: Arc<StdMutex<bool>>,
     commands: Vec<String>,
+    ws_rx: Option<tokio::sync::broadcast::Receiver<crate::roon::WsMessage>>,
 ) -> io::Result<()>
 where
     F: Fn(String) -> Fut + 'static,
@@ -579,12 +1073,103 @@ where
     // Setup terminal
     enable_raw_mode()?;
     let mut stdout = stdout();
-    execute!(stdout, EnterAlternateScreen)?;
+    execute!(
+        stdout,
+        EnterAlternateScreen,
+        event::EnableMouseCapture
+    )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
     // Create app
     let mut app = App::new(message_buffer.clone(), prompt_fn, commands);
+
+    // Setup event buffer and zone buffer if we have a WebSocket receiver
+    if let Some(mut ws_rx) = ws_rx {
+        let event_buffer = Arc::new(StdMutex::new(EventBuffer::new(1000)));
+        app.set_event_buffer(event_buffer.clone());
+
+        let zone_buffer = Arc::new(StdMutex::new(ZoneBuffer::new()));
+        app.set_zone_buffer(zone_buffer.clone());
+
+        // Spawn event listener task
+        tokio::spawn(async move {
+            use chrono::Local;
+            while let Ok(msg) = ws_rx.recv().await {
+                // Handle SeekUpdated events separately (update position but don't show in event buffer)
+                if let crate::roon::WsMessage::SeekUpdated { zone_id, seek_position, .. } = &msg {
+                    if let Ok(mut buffer) = zone_buffer.lock() {
+                        buffer.update_position(zone_id, *seek_position);
+                    }
+                    continue;
+                }
+
+                // Get current log level to determine format
+                let current_level = log::max_level();
+                let use_debug_format = current_level == log::LevelFilter::Debug || current_level == log::LevelFilter::Trace;
+
+                let event_str = if use_debug_format {
+                    // DEBUG/TRACE: Show full event structure
+                    match &msg {
+                        crate::roon::WsMessage::ZonesChanged { now_playing } => {
+                            format!("[{}] zones_changed:\n{:#?}", Local::now().format("%H:%M:%S"), now_playing)
+                        }
+                        crate::roon::WsMessage::ConnectionChanged { connected } => {
+                            format!("[{}] connection_changed: {:#?}", Local::now().format("%H:%M:%S"), connected)
+                        }
+                        crate::roon::WsMessage::QueueChanged { zone_id } => {
+                            format!("[{}] queue_changed: {:#?}", Local::now().format("%H:%M:%S"), zone_id)
+                        }
+                        crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
+                    }
+                } else {
+                    // INFO/OFF: Show simplified summary
+                    match &msg {
+                        crate::roon::WsMessage::ZonesChanged { now_playing } => {
+                            format!("[{}] zones_changed: {} zones", Local::now().format("%H:%M:%S"), now_playing.len())
+                        }
+                        crate::roon::WsMessage::ConnectionChanged { connected } => {
+                            format!("[{}] connection_changed: {}", Local::now().format("%H:%M:%S"), connected)
+                        }
+                        crate::roon::WsMessage::QueueChanged { zone_id } => {
+                            format!("[{}] queue_changed: zone={}", Local::now().format("%H:%M:%S"), zone_id)
+                        }
+                        crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
+                    }
+                };
+
+                if let Ok(mut buffer) = event_buffer.lock() {
+                    buffer.push(event_str);
+                }
+
+                // Update zone buffer when zones change
+                if let crate::roon::WsMessage::ZonesChanged { now_playing } = &msg {
+                    let mut zones: Vec<ZoneDisplay> = now_playing.iter().map(|z| {
+                        ZoneDisplay {
+                            zone_id: z.zone_id.clone(),
+                            zone_name: z.zone_name.clone(),
+                            state: z.state.clone(),
+                            track: z.track.clone(),
+                            artist: z.artist.clone(),
+                            album: z.album.clone(),
+                            format: z.dcs_format.clone(),
+                            position_seconds: z.position_seconds,
+                            length_seconds: z.length_seconds,
+                        }
+                    }).collect();
+
+                    // Sort zones: playing, loading, paused, stopped, then others
+                    zones.sort_by(|a, b| {
+                        get_state_priority(&a.state).cmp(&get_state_priority(&b.state))
+                    });
+
+                    if let Ok(mut buffer) = zone_buffer.lock() {
+                        buffer.update(zones);
+                    }
+                }
+            }
+        });
+    }
 
     // Create channel for commands
     let (tx, mut rx) = tokio::sync::mpsc::unbounded_channel::<String>();
@@ -600,16 +1185,23 @@ where
     // Main loop
     local.run_until(async {
         loop {
-            // Render
-            app.render(&mut terminal)?;
+            // Render and get window areas for mouse click detection
+            let (zone_area, event_area, output_area) = app.render(&mut terminal)?;
 
             // Handle input with timeout to allow other tasks to run
             let poll_result = tokio::time::timeout(
                 tokio::time::Duration::from_millis(16),
                 async {
                     if event::poll(std::time::Duration::from_millis(0))? {
-                        if let Event::Key(key) = event::read()? {
-                            return Ok::<Option<String>, io::Error>(app.handle_key(key));
+                        match event::read()? {
+                            Event::Key(key) => {
+                                return Ok::<Option<String>, io::Error>(app.handle_key(key));
+                            }
+                            Event::Mouse(mouse) => {
+                                app.handle_mouse(mouse, zone_area, event_area, output_area);
+                                return Ok(None);
+                            }
+                            _ => {}
                         }
                     }
                     Ok(None)
@@ -644,7 +1236,11 @@ where
 
     // Restore terminal
     disable_raw_mode()?;
-    execute!(terminal.backend_mut(), LeaveAlternateScreen)?;
+    execute!(
+        terminal.backend_mut(),
+        LeaveAlternateScreen,
+        event::DisableMouseCapture
+    )?;
     terminal.show_cursor()?;
 
     Ok(())
