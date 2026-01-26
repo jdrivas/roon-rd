@@ -305,6 +305,8 @@ pub struct App {
     completion_index: Option<usize>,
     /// Which window is currently maximized
     maximized_window: MaximizedWindow,
+    /// Whether help popup is showing
+    show_help: bool,
 }
 
 impl App {
@@ -333,6 +335,7 @@ impl App {
             completion_candidates: Vec::new(),
             completion_index: None,
             maximized_window: MaximizedWindow::None,
+            show_help: false,
         }
     }
 
@@ -403,12 +406,46 @@ impl App {
     /// Handle keyboard input
     pub fn handle_key(&mut self, key: KeyEvent) -> Option<String> {
         match (key.code, key.modifiers) {
-            // ESC - restore normal layout if maximized
+            // ESC - close help popup or restore normal layout if maximized
             (KeyCode::Esc, _) => {
-                if self.maximized_window != MaximizedWindow::None {
+                if self.show_help {
+                    self.show_help = false;
+                } else if self.maximized_window != MaximizedWindow::None {
                     self.maximized_window = MaximizedWindow::None;
                 }
                 self.reset_completion();
+                None
+            }
+            // Ctrl+Z - toggle maximize zones window
+            (KeyCode::Char('z'), KeyModifiers::CONTROL) => {
+                self.maximized_window = if self.maximized_window == MaximizedWindow::Zones {
+                    MaximizedWindow::None
+                } else {
+                    MaximizedWindow::Zones
+                };
+                None
+            }
+            // Ctrl+E - toggle maximize events window
+            (KeyCode::Char('e'), KeyModifiers::CONTROL) => {
+                self.maximized_window = if self.maximized_window == MaximizedWindow::Events {
+                    MaximizedWindow::None
+                } else {
+                    MaximizedWindow::Events
+                };
+                None
+            }
+            // Ctrl+O - toggle maximize output window
+            (KeyCode::Char('o'), KeyModifiers::CONTROL) => {
+                self.maximized_window = if self.maximized_window == MaximizedWindow::Output {
+                    MaximizedWindow::None
+                } else {
+                    MaximizedWindow::Output
+                };
+                None
+            }
+            // Ctrl+H - toggle help popup
+            (KeyCode::Char('h'), KeyModifiers::CONTROL) => {
+                self.show_help = !self.show_help;
                 None
             }
             // Ctrl+C or Ctrl+D - exit
@@ -1051,8 +1088,128 @@ impl App {
                 chunks[input_chunk_idx].x + prompt.len() as u16 + self.cursor_position as u16 + 1,
                 chunks[input_chunk_idx].y + 1,
             ));
+
+            // Render help popup if showing
+            if self.show_help {
+                self.render_help_popup(f);
+            }
         })?;
         Ok((zone_area, event_area, output_area))
+    }
+
+    /// Render the help popup overlay
+    fn render_help_popup(&self, f: &mut ratatui::Frame) {
+        use ratatui::widgets::{Block, Borders, Clear, Paragraph, Wrap};
+        use ratatui::style::{Color, Style};
+        use ratatui::text::{Line, Span};
+
+        // Create help content with colors suitable for white background
+        let help_lines = vec![
+            Line::from(Span::styled("Keyboard Shortcuts", Style::default().fg(Color::Blue))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Ctrl+H", Style::default().fg(Color::Magenta)),
+                Span::styled("         Toggle this help popup", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+Z", Style::default().fg(Color::Magenta)),
+                Span::styled("         Maximize/restore Zones window", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+E", Style::default().fg(Color::Magenta)),
+                Span::styled("         Maximize/restore Events window", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+O", Style::default().fg(Color::Magenta)),
+                Span::styled("         Maximize/restore Output window", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("ESC", Style::default().fg(Color::Magenta)),
+                Span::styled("            Restore normal layout / Close popup", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("Up/Down", Style::default().fg(Color::Magenta)),
+                Span::styled("        Scroll output window", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Alt+Up/Down", Style::default().fg(Color::Magenta)),
+                Span::styled("    Scroll events window", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+Up/Down", Style::default().fg(Color::Magenta)),
+                Span::styled("   Browse command history", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Tab", Style::default().fg(Color::Magenta)),
+                Span::styled("            Command completion", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("Ctrl+C/Ctrl+D", Style::default().fg(Color::Magenta)),
+                Span::styled("  Exit", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("Common Commands", Style::default().fg(Color::Blue))),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("status", Style::default().fg(Color::DarkGray)),
+                Span::styled("          Show connection status", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("zones", Style::default().fg(Color::DarkGray)),
+                Span::styled("           List available zones", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("help", Style::default().fg(Color::DarkGray)),
+                Span::styled("            Show all commands", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("verbose", Style::default().fg(Color::DarkGray)),
+                Span::styled("         Toggle verbose logging", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(""),
+            Line::from(vec![
+                Span::styled("dcs-playing", Style::default().fg(Color::DarkGray)),
+                Span::styled("     Get dCS playback info", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(vec![
+                Span::styled("dcs-format", Style::default().fg(Color::DarkGray)),
+                Span::styled("      Get dCS audio format", Style::default().fg(Color::Black)),
+            ]),
+            Line::from(""),
+            Line::from(Span::styled("Press ESC to close", Style::default().fg(Color::DarkGray))),
+        ];
+
+        // Calculate popup size (80% of screen, centered)
+        let area = f.area();
+        let popup_width = (area.width as f32 * 0.8).min(80.0) as u16;
+        let popup_height = (area.height as f32 * 0.8).min(30.0) as u16;
+
+        let popup_x = (area.width.saturating_sub(popup_width)) / 2;
+        let popup_y = (area.height.saturating_sub(popup_height)) / 2;
+
+        let popup_area = ratatui::layout::Rect {
+            x: popup_x,
+            y: popup_y,
+            width: popup_width,
+            height: popup_height,
+        };
+
+        // Clear the area behind the popup
+        f.render_widget(Clear, popup_area);
+
+        // Render the popup with very subtle light gray background
+        // Using RGB(245, 245, 245) - just slightly darker than white (255,255,255)
+        let block = Block::default()
+            .title(" Help - Keyboard Shortcuts & Commands ")
+            .borders(Borders::ALL)
+            .style(Style::default().bg(Color::Rgb(245, 245, 245)).fg(Color::Black));
+
+        let paragraph = Paragraph::new(help_lines)
+            .block(block)
+            .wrap(Wrap { trim: false });
+
+        f.render_widget(paragraph, popup_area);
     }
 }
 
