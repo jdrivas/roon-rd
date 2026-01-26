@@ -17,6 +17,9 @@ use simplelog::*;
 use colored::Colorize;
 use chrono::Local;
 
+/// Default hostname for dCS devices when not specified
+const DEFAULT_DCS_HOST: &str = "dcs-vivaldi.local";
+
 /// Command completer for interactive mode
 struct CommandCompleter {
     commands: Vec<String>,
@@ -436,12 +439,16 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
         }
         "" => Ok(()),
         _ => {
-            // Check if it's a UPnP command with URL argument
+            // Check if it's a UPnP or dCS command with optional arguments
             let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-            if parts.len() >= 2 {
+            if parts.len() >= 1 {
                 let command = parts[0];
-                let arg = parts[1..].join(" ");
+                let arg = if parts.len() > 1 {
+                    parts[1..].join(" ")
+                } else {
+                    String::new()
+                };
 
                 match command {
                     "upnp-info" => {
@@ -662,15 +669,15 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-playing" => {
                         // Get dCS playback information
-                        // Usage: dcs-playing <host>
+                        // Usage: dcs-playing [host]
                         // Example: dcs-playing dcs-vivaldi.local
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 2 {
-                            return Err("Usage: dcs-playing <host>\n\nExample: dcs-playing dcs-vivaldi.local\n       dcs-playing 192.168.50.31".to_string());
-                        }
-
-                        let host = parts[1];
+                        let host = if parts.len() >= 2 {
+                            parts[1]
+                        } else {
+                            DEFAULT_DCS_HOST
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Getting playback info from {}...", host));
@@ -729,15 +736,15 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-format" => {
                         // Get dCS audio format information
-                        // Usage: dcs-format <host>
+                        // Usage: dcs-format [host]
                         // Example: dcs-format dcs-vivaldi.local
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 2 {
-                            return Err("Usage: dcs-format <host>\n\nExample: dcs-format dcs-vivaldi.local\n       dcs-format 192.168.50.31".to_string());
-                        }
-
-                        let host = parts[1];
+                        let host = if parts.len() >= 2 {
+                            parts[1]
+                        } else {
+                            DEFAULT_DCS_HOST
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Getting audio format from {}...", host));
@@ -766,15 +773,15 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-settings" => {
                         // Get dCS device settings
-                        // Usage: dcs-settings <host>
+                        // Usage: dcs-settings [host]
                         // Example: dcs-settings dcs-vivaldi.local
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 2 {
-                            return Err("Usage: dcs-settings <host>\n\nExample: dcs-settings dcs-vivaldi.local\n       dcs-settings 192.168.50.31".to_string());
-                        }
-
-                        let host = parts[1];
+                        let host = if parts.len() >= 2 {
+                            parts[1]
+                        } else {
+                            DEFAULT_DCS_HOST
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Getting device settings from {}...", host));
@@ -803,14 +810,14 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-upsampler" => {
                         // Get dCS upsampler settings
-                        // Usage: dcs-upsampler <host>
+                        // Usage: dcs-upsampler [host]
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 2 {
-                            return Err("Usage: dcs-upsampler <host>\n\nExample: dcs-upsampler dcs-vivaldi.local\n       dcs-upsampler 192.168.50.31".to_string());
-                        }
-
-                        let host = parts[1];
+                        let host = if parts.len() >= 2 {
+                            parts[1]
+                        } else {
+                            DEFAULT_DCS_HOST
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Getting upsampler settings from {}...", host));
@@ -848,14 +855,14 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-inputs" => {
                         // Get dCS digital inputs
-                        // Usage: dcs-inputs <host>
+                        // Usage: dcs-inputs [host]
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 2 {
-                            return Err("Usage: dcs-inputs <host>\n\nExample: dcs-inputs dcs-vivaldi.local\n       dcs-inputs 192.168.50.31".to_string());
-                        }
-
-                        let host = parts[1];
+                        let host = if parts.len() >= 2 {
+                            parts[1]
+                        } else {
+                            DEFAULT_DCS_HOST
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Getting digital inputs from {}...", host));
@@ -882,14 +889,14 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-playmode" => {
                         // Get dCS play mode
-                        // Usage: dcs-playmode <host>
+                        // Usage: dcs-playmode [host]
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 2 {
-                            return Err("Usage: dcs-playmode <host>\n\nExample: dcs-playmode dcs-vivaldi.local\n       dcs-playmode 192.168.50.31".to_string());
-                        }
-
-                        let host = parts[1];
+                        let host = if parts.len() >= 2 {
+                            parts[1]
+                        } else {
+                            DEFAULT_DCS_HOST
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Getting play mode from {}...", host));
@@ -911,15 +918,18 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-menu" => {
                         // Browse dCS menu hierarchy
-                        // Usage: dcs-menu <host> <path>
+                        // Usage: dcs-menu [host] <path>
                         let parts: Vec<&str> = query_type.splitn(3, ' ').collect();
 
-                        if parts.len() < 3 {
-                            return Err("Usage: dcs-menu <host> <path>\n\nExamples:\n  dcs-menu dcs-vivaldi.local dcsUiMenu:/ui/settings/audio\n  dcs-menu 192.168.50.31 dcsUiMenu:/ui/settings/frontPanel".to_string());
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-menu [host] <path>\n\nExamples:\n  dcs-menu dcsUiMenu:/ui/settings/audio\n  dcs-menu dcs-vivaldi.local dcsUiMenu:/ui/settings/audio\n  dcs-menu 192.168.50.31 dcsUiMenu:/ui/settings/frontPanel".to_string());
                         }
 
-                        let host = parts[1];
-                        let path = parts[2];
+                        let (host, path) = if parts.len() >= 3 {
+                            (parts[1], parts[2])
+                        } else {
+                            (DEFAULT_DCS_HOST, parts[1])
+                        };
 
                         out.writeln("".to_string());
                         out.writeln(format!("  Browsing menu: {}...", path));
@@ -968,15 +978,18 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-set-brightness" => {
                         // Set dCS display brightness
-                        // Usage: dcs-set-brightness <host> <0-15>
+                        // Usage: dcs-set-brightness [host] <0-15>
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 3 {
-                            return Err("Usage: dcs-set-brightness <host> <0-15>\n\nExample: dcs-set-brightness dcs-vivaldi.local 10\n       dcs-set-brightness 192.168.50.31 5".to_string());
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-set-brightness [host] <0-15>\n\nExamples:\n  dcs-set-brightness 10\n  dcs-set-brightness dcs-vivaldi.local 10\n  dcs-set-brightness 192.168.50.31 5".to_string());
                         }
 
-                        let host = parts[1];
-                        let brightness_str = parts[2];
+                        let (host, brightness_str) = if parts.len() >= 3 {
+                            (parts[1], parts[2])
+                        } else {
+                            (DEFAULT_DCS_HOST, parts[1])
+                        };
 
                         // Parse brightness value
                         let brightness: i32 = brightness_str.parse()
@@ -997,15 +1010,18 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                     }
                     "dcs-set-display" => {
                         // Set dCS display on/off
-                        // Usage: dcs-set-display <host> <on|off>
+                        // Usage: dcs-set-display [host] <on|off>
                         let parts: Vec<&str> = query_type.split_whitespace().collect();
 
-                        if parts.len() < 3 {
-                            return Err("Usage: dcs-set-display <host> <on|off>\n\nExample: dcs-set-display dcs-vivaldi.local off\n       dcs-set-display 192.168.50.31 on".to_string());
+                        if parts.len() < 2 {
+                            return Err("Usage: dcs-set-display [host] <on|off>\n\nExamples:\n  dcs-set-display off\n  dcs-set-display dcs-vivaldi.local off\n  dcs-set-display 192.168.50.31 on".to_string());
                         }
 
-                        let host = parts[1];
-                        let state_str = parts[2].to_lowercase();
+                        let (host, state_str) = if parts.len() >= 3 {
+                            (parts[1], parts[2].to_lowercase())
+                        } else {
+                            (DEFAULT_DCS_HOST, parts[1].to_lowercase())
+                        };
 
                         // Parse on/off state
                         let display_off = match state_str.as_str() {

@@ -1075,8 +1075,7 @@ where
     let mut stdout = stdout();
     execute!(
         stdout,
-        EnterAlternateScreen,
-        event::EnableMouseCapture
+        EnterAlternateScreen
     )?;
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
@@ -1198,6 +1197,8 @@ where
                                 return Ok::<Option<String>, io::Error>(app.handle_key(key));
                             }
                             Event::Mouse(mouse) => {
+                                // Note: Mouse capture is disabled to allow text selection/copy/paste
+                                // Mouse events won't be received, so this code path is inactive
                                 app.handle_mouse(mouse, zone_area, event_area, output_area);
                                 return Ok(None);
                             }
@@ -1238,8 +1239,7 @@ where
     disable_raw_mode()?;
     execute!(
         terminal.backend_mut(),
-        LeaveAlternateScreen,
-        event::DisableMouseCapture
+        LeaveAlternateScreen
     )?;
     terminal.show_cursor()?;
 
