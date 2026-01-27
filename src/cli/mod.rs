@@ -61,6 +61,7 @@ impl CommandCompleter {
                 "status".to_string(),
                 "zones".to_string(),
                 "now-playing".to_string(),
+                "queue".to_string(),
                 "play".to_string(),
                 "pause".to_string(),
                 "stop".to_string(),
@@ -314,6 +315,81 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
             }
             Ok(())
         }
+        query if query.starts_with("queue") => {
+            let client = client.ok_or("Roon commands require connection. Remove --upnp-only flag.")?;
+            let zones = client.get_zones().await;
+
+            if zones.is_empty() {
+                out.writeln("".to_string());
+                out.writeln("  No zones found.".to_string());
+                if !client.is_connected().await {
+                    out.writeln("  Not connected to Roon Core. Please authorize the extension.".to_string());
+                }
+                out.writeln("".to_string());
+                return Ok(());
+            }
+
+            // Parse command to check for zone name argument
+            let parts: Vec<&str> = query_type.split_whitespace().collect();
+
+            // If a specific zone is specified, show queue for that zone
+            // Otherwise show queue for the first zone with now_playing
+            let target_zone = if parts.len() > 1 {
+                let zone_name = parts[1..].join(" ");
+                zones.iter().find(|z| z.display_name.to_lowercase().contains(&zone_name.to_lowercase()))
+            } else {
+                zones.iter().find(|z| z.now_playing.is_some())
+            };
+
+            if let Some(zone) = target_zone {
+                out.writeln("".to_string());
+                out.writeln(format!("  Queue for: {}", zone.display_name));
+                out.writeln("  ─────────────────────────────────────".to_string());
+                out.writeln("".to_string());
+
+                // Subscribe to queue and wait for data
+                client.subscribe_to_queue(&zone.zone_id).await;
+
+                // Get the queue
+                if let Some(queue_items) = client.get_queue(&zone.zone_id).await {
+                    if queue_items.is_empty() {
+                        out.writeln("  Queue is empty.".to_string());
+                    } else {
+                        for (i, item) in queue_items.iter().enumerate() {
+                            let two_line = &item.two_line;
+                            let num = format!("{:3}.", i + 1);
+
+                            // Format track info
+                            out.writeln(format!("  {} {}", num, two_line.line1));
+                            if !two_line.line2.is_empty() {
+                                out.writeln(format!("       {}", two_line.line2));
+                            }
+
+                            // Show length if available (length is u32 seconds)
+                            if item.length > 0 {
+                                out.writeln(format!("       Duration: {}", format_duration(item.length)));
+                            }
+
+                            out.writeln("".to_string());
+                        }
+                        out.writeln(format!("  Total: {} track{}", queue_items.len(), if queue_items.len() == 1 { "" } else { "s" }));
+                    }
+                } else {
+                    out.writeln("  Could not retrieve queue.".to_string());
+                }
+                out.writeln("".to_string());
+            } else {
+                out.writeln("".to_string());
+                if parts.len() > 1 {
+                    out.writeln(format!("  Zone '{}' not found.", parts[1..].join(" ")));
+                } else {
+                    out.writeln("  No zones are currently playing.".to_string());
+                    out.writeln("  Usage: queue [zone name]".to_string());
+                }
+                out.writeln("".to_string());
+            }
+            Ok(())
+        }
         "upnp-discover" => {
             out.writeln("".to_string());
             out.writeln("  Discovering UPnP devices (5 second timeout)...".to_string());
@@ -403,6 +479,7 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
             out.writeln("    status             - Show connection status".to_string());
             out.writeln("    zones              - List available zones".to_string());
             out.writeln("    now-playing        - Show currently playing tracks".to_string());
+            out.writeln("    queue [zone]       - Show queue for zone (defaults to first playing zone)".to_string());
             out.writeln("    play <zone_id>     - Start playback in zone".to_string());
             out.writeln("    pause <zone_id>    - Pause playback in zone".to_string());
             out.writeln("    stop <zone_id>     - Stop playback in zone".to_string());
@@ -1483,6 +1560,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
             "status".to_string(),
             "zones".to_string(),
             "now-playing".to_string(),
+            "queue".to_string(),
             "play".to_string(),
             "pause".to_string(),
             "stop".to_string(),

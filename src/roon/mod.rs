@@ -36,6 +36,10 @@ pub enum WsMessage {
     #[serde(rename = "zones_changed")]
     ZonesChanged {
         now_playing: Vec<WsZoneData>,
+        #[serde(skip_serializing)]  // Don't send raw zones to web clients, only for TUI
+        raw_zones: Vec<Zone>,
+        #[serde(skip_serializing)]  // Don't send raw JSON to web clients, only for TUI
+        raw_json: Option<String>,
     },
     #[serde(rename = "connection_changed")]
     ConnectionChanged { connected: bool },
@@ -55,6 +59,7 @@ pub enum WsMessage {
 pub struct RoonClient {
     api: RoonApi,
     zones: Arc<RwLock<HashMap<String, Zone>>>,
+    zones_raw_json: Arc<RwLock<Option<String>>>, // Last raw JSON from Roon for zones_changed
     queues: Arc<RwLock<HashMap<String, Vec<QueueItem>>>>, // zone_id -> queue items
     active_queue_zone: Arc<RwLock<Option<String>>>, // zone_id of currently subscribed queue
     queue_ready: Arc<Notify>, // Notifies when queue data arrives for active zone
@@ -80,10 +85,12 @@ const DCS_UPDATE_DELAY_MS: u64 = 200;
 const STOP_BROADCAST_DELAY_MS: u64 = 500;
 
 /// Build WebSocket zone data from zones Arc (standalone function for use in event handlers)
-async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>) -> Vec<WsZoneData> {
+/// Returns both the simplified WsZoneData, the raw Zones from Roon, and the raw JSON string
+async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>, zones_raw_json: Arc<RwLock<Option<String>>>) -> (Vec<WsZoneData>, Vec<Zone>, Option<String>) {
     use crate::dcs;
 
     let zones_vec: Vec<Zone> = zones.read().await.values().cloned().collect();
+    let raw_zones = zones_vec.clone();  // Keep a copy of raw zones
     log::debug!("build_ws_zone_data_from_zones: Processing {} zones", zones_vec.len());
 
     // Process all zones in parallel
@@ -220,12 +227,14 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
     }).collect();
 
     let result = futures_util::future::join_all(zone_futures).await;
-    log::debug!("build_ws_zone_data_from_zones: Returning {} zone data items", result.len());
+    let raw_json = zones_raw_json.read().await.clone();
+    log::debug!("build_ws_zone_data_from_zones: Returning {} zone data items, {} raw zones, and raw JSON ({})",
+                result.len(), raw_zones.len(), if raw_json.is_some() { "present" } else { "absent" });
     for item in &result {
         log::debug!("  Zone {}: state={}, track={:?}, dcs_format={:?}",
                    item.zone_name, item.state, item.track, item.dcs_format);
     }
-    result
+    (result, raw_zones, raw_json)
 }
 
 /// Get the local IP address of this machine
@@ -271,6 +280,7 @@ impl RoonClient {
         Ok(RoonClient {
             api,
             zones: Arc::new(RwLock::new(HashMap::new())),
+            zones_raw_json: Arc::new(RwLock::new(None)),
             queues: Arc::new(RwLock::new(HashMap::new())),
             active_queue_zone: Arc::new(RwLock::new(None)),
             queue_ready: Arc::new(Notify::new()),
@@ -317,6 +327,7 @@ impl RoonClient {
 
         // Clone Arc references for the handler
         let zones = self.zones.clone();
+        let zones_raw_json = self.zones_raw_json.clone();
         let queues = self.queues.clone();
         let active_queue_zone = self.active_queue_zone.clone();
         let queue_ready = self.queue_ready.clone();
@@ -394,7 +405,7 @@ impl RoonClient {
                     }
 
                     // Handle messages via Parsed enum
-                    if let Some((_raw_msg, parsed)) = msg {
+                    if let Some((raw_msg, parsed)) = msg {
                         match parsed {
                             Parsed::RoonState(roon_state) => {
                                 // Save state to persist authorization token
@@ -405,6 +416,11 @@ impl RoonClient {
                             Parsed::Zones(zones_changed) => {
                                 log::debug!("Roon API Zones response:\n{:#?}", zones_changed);
                                 log::debug!("Zones changed, updating zone map");
+
+                                // Capture and store raw JSON for TUI display
+                                let raw_json = serde_json::to_string_pretty(&raw_msg).ok();
+                                *zones_raw_json.write().await = raw_json;
+
                                 let mut zone_map = zones.write().await;
 
                                 // Collect image keys to request
@@ -478,11 +494,12 @@ impl RoonClient {
                                         drop(pending); // Release lock before broadcasting
 
                                         let zones_clone = zones.clone();
+                                        let zones_raw_json_clone = zones_raw_json.clone();
                                         let ws_tx_clone = ws_tx.clone();
                                         tokio::spawn(async move {
-                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
                                             log::debug!("Broadcasting immediate stop for zone (double-stop detected)");
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
                                         });
                                     } else {
                                         // No pending stop - start delayed broadcast
@@ -490,6 +507,7 @@ impl RoonClient {
 
                                         let ws_tx_clone = ws_tx.clone();
                                         let zones_clone = zones.clone();
+                                        let zones_raw_json_clone = zones_raw_json.clone();
                                         let zone_id_clone = zone_id.clone();
                                         let pending_stops_clone2 = pending_stops_clone.clone();
 
@@ -497,9 +515,9 @@ impl RoonClient {
                                             tokio::time::sleep(tokio::time::Duration::from_millis(STOP_BROADCAST_DELAY_MS)).await;
 
                                             // Build and broadcast stop
-                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
                                             log::debug!("Broadcasting delayed stop for zone {}", zone_id_clone);
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
 
                                             // Remove self from pending map
                                             pending_stops_clone2.lock().await.remove(&zone_id_clone);
@@ -522,13 +540,14 @@ impl RoonClient {
 
                                         let ws_tx_clone = ws_tx.clone();
                                         let zones_clone = zones.clone();
+                                        let zones_raw_json_clone = zones_raw_json.clone();
 
                                         tokio::spawn(async move {
                                             // Brief delay to let dCS device process the new stream
                                             tokio::time::sleep(tokio::time::Duration::from_millis(DCS_UPDATE_DELAY_MS)).await;
 
                                             // Build zone data with dCS format
-                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
 
                                             // Broadcast zone change with full data
                                             log::debug!("Broadcasting zone change (after dCS delay) with {} zones of data", zone_data.len());
@@ -536,20 +555,21 @@ impl RoonClient {
                                                 log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
                                                            item.zone_name, item.state, item.track, item.dcs_format);
                                             }
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
                                         });
                                     } else {
                                         // No dCS zones in Playing state, build and broadcast immediately
                                         let zones_clone = zones.clone();
+                                        let zones_raw_json_clone = zones_raw_json.clone();
                                         let ws_tx_clone = ws_tx.clone();
                                         tokio::spawn(async move {
-                                            let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
                                             log::debug!("Broadcasting zone change (no dCS delay) with {} zones of data", zone_data.len());
                                             for item in &zone_data {
                                                 log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
                                                            item.zone_name, item.state, item.track, item.dcs_format);
                                             }
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
                                         });
                                     }
                                 } else if has_stopped_zones.is_empty() && !has_non_loading {
@@ -568,15 +588,16 @@ impl RoonClient {
 
                                 // Broadcast zone change with full data via WebSocket
                                 let zones_clone = zones.clone();
+                                let zones_raw_json_clone = zones_raw_json.clone();
                                 let ws_tx_clone = ws_tx.clone();
                                 tokio::spawn(async move {
-                                    let zone_data = build_ws_zone_data_from_zones(zones_clone).await;
+                                    let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
                                     log::debug!("Broadcasting zone removal with {} zones of data", zone_data.len());
                                     for item in &zone_data {
                                         log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
                                                    item.zone_name, item.state, item.track, item.dcs_format);
                                     }
-                                    let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data });
+                                    let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
                                 });
                             }
                             Parsed::ZonesSeek(zones_seek) => {
@@ -779,8 +800,9 @@ impl RoonClient {
 
     /// Build WebSocket zone data with dCS format
     /// This method calls the standalone function with the zones Arc
-    pub async fn build_ws_zone_data(&self) -> Vec<WsZoneData> {
-        build_ws_zone_data_from_zones(self.zones.clone()).await
+    /// Returns the simplified WsZoneData, raw Zones from Roon, and raw JSON string
+    pub async fn build_ws_zone_data(&self) -> (Vec<WsZoneData>, Vec<Zone>, Option<String>) {
+        build_ws_zone_data_from_zones(self.zones.clone(), self.zones_raw_json.clone()).await
     }
 
     /// OLD IMPLEMENTATION - kept for reference but not used

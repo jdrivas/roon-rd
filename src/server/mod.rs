@@ -1838,7 +1838,7 @@ async fn now_playing_handler(State(state): State<AppState>) -> Json<NowPlayingRe
     log::debug!("now_playing_handler called");
 
     // Use the RoonClient's build_ws_zone_data method which has all the debug logging
-    let now_playing = {
+    let (now_playing, _raw_zones, _raw_json) = {
         let client = state.roon_client.lock().await;
         client.build_ws_zone_data().await
     }; // Lock is released here

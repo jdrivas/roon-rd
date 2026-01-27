@@ -1205,8 +1205,12 @@ impl App {
                         Span::styled("         Toggle verbose logging", Style::default().fg(Color::Black)),
                     ]),
                     Line::from(""),
-                    Line::from(Span::styled("Playback Control", Style::default().fg(Color::Blue))),
+                    Line::from(Span::styled("Queue & Playback", Style::default().fg(Color::Blue))),
                     Line::from(""),
+                    Line::from(vec![
+                        Span::styled("queue [zone]", Style::default().fg(Color::DarkGray)),
+                        Span::styled("    Show queue for zone", Style::default().fg(Color::Black)),
+                    ]),
                     Line::from(vec![
                         Span::styled("play", Style::default().fg(Color::DarkGray)),
                         Span::styled("            Start playback", Style::default().fg(Color::Black)),
@@ -1454,10 +1458,14 @@ where
                 let use_debug_format = current_level == log::LevelFilter::Debug || current_level == log::LevelFilter::Trace;
 
                 let event_str = if use_debug_format {
-                    // DEBUG/TRACE: Show full event structure
+                    // DEBUG/TRACE: Show RAW JSON from Roon (unfiltered by serde structs)
                     match &msg {
-                        crate::roon::WsMessage::ZonesChanged { now_playing } => {
-                            format!("[{}] zones_changed:\n{:#?}", Local::now().format("%H:%M:%S"), now_playing)
+                        crate::roon::WsMessage::ZonesChanged { raw_json, .. } => {
+                            if let Some(json) = raw_json {
+                                format!("[{}] zones_changed (raw JSON from Roon):\n{}", Local::now().format("%H:%M:%S"), json)
+                            } else {
+                                format!("[{}] zones_changed (raw JSON not available)", Local::now().format("%H:%M:%S"))
+                            }
                         }
                         crate::roon::WsMessage::ConnectionChanged { connected } => {
                             format!("[{}] connection_changed: {:#?}", Local::now().format("%H:%M:%S"), connected)
@@ -1468,10 +1476,14 @@ where
                         crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
                     }
                 } else {
-                    // INFO/OFF: Show simplified summary
+                    // INFO/OFF: Show RAW JSON from Roon (unfiltered by serde structs)
                     match &msg {
-                        crate::roon::WsMessage::ZonesChanged { now_playing } => {
-                            format!("[{}] zones_changed: {} zones", Local::now().format("%H:%M:%S"), now_playing.len())
+                        crate::roon::WsMessage::ZonesChanged { raw_json, .. } => {
+                            if let Some(json) = raw_json {
+                                format!("[{}] zones_changed (raw JSON from Roon):\n{}", Local::now().format("%H:%M:%S"), json)
+                            } else {
+                                format!("[{}] zones_changed (raw JSON not available)", Local::now().format("%H:%M:%S"))
+                            }
                         }
                         crate::roon::WsMessage::ConnectionChanged { connected } => {
                             format!("[{}] connection_changed: {}", Local::now().format("%H:%M:%S"), connected)
@@ -1488,7 +1500,7 @@ where
                 }
 
                 // Update zone buffer when zones change
-                if let crate::roon::WsMessage::ZonesChanged { now_playing } = &msg {
+                if let crate::roon::WsMessage::ZonesChanged { now_playing, .. } = &msg {
                     let mut zones: Vec<ZoneDisplay> = now_playing.iter().map(|z| {
                         ZoneDisplay {
                             zone_id: z.zone_id.clone(),
