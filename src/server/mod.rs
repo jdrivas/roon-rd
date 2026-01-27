@@ -372,6 +372,32 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         .track-details-top {
             flex: 0 0 auto;
         }
+        .artist-images {
+            position: relative;
+            margin-top: 12px;
+            flex: 1;
+            min-height: 0;
+            overflow: hidden;
+            cursor: pointer;
+            transition: opacity 0.3s ease-in-out;
+        }
+        .artist-images.hidden {
+            opacity: 0;
+        }
+        .artist-image {
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            object-fit: contain;
+            border-radius: 4px;
+            opacity: 0;
+            transition: opacity 0.5s ease-in-out;
+        }
+        .artist-image.active {
+            opacity: 1;
+        }
         .zone-controls-container {
             display: flex;
             flex-direction: column;
@@ -642,6 +668,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         let availableZones = [];  // All zones from /zones
         let nowPlayingZones = [];  // Playing/paused zones from /now-playing
         let timeDisplayMode = {};  // Track time display mode per zone: true = show remaining, false = show total
+        let artistImageCarousels = {};  // Track carousel timers per zone
+        let artistImagesVisible = {};  // Track artist image visibility per zone: true = visible (default), false = hidden
         const placeholderSvg = '<svg viewBox="0 0 24 24" xmlns="http://www.w3.org/2000/svg"><path d="M12 3v10.55c-.59-.34-1.27-.55-2-.55-2.21 0-4 1.79-4 4s1.79 4 4 4 4-1.79 4-4V7h4V3h-6z"/></svg>';
 
         // SVG icons for different zone types
@@ -738,6 +766,67 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             }
         }
 
+        function startArtistImageCarousel(zoneId) {
+            // Stop existing carousel for this zone if any
+            stopArtistImageCarousel(zoneId);
+
+            const container = document.querySelector(`.artist-images[data-zone-id="${zoneId}"]`);
+            if (!container) return;
+
+            const images = container.querySelectorAll('.artist-image');
+            if (images.length <= 1) return; // No need for carousel with 0 or 1 image
+
+            let currentIndex = 0;
+
+            const rotateImage = () => {
+                // Remove active class from current image
+                images[currentIndex].classList.remove('active');
+
+                // Move to next image
+                currentIndex = (currentIndex + 1) % images.length;
+
+                // Add active class to new current image
+                images[currentIndex].classList.add('active');
+            };
+
+            // Start the carousel with 5 second interval
+            const intervalId = setInterval(rotateImage, 5000);
+
+            // Store the interval ID so we can stop it later
+            artistImageCarousels[zoneId] = intervalId;
+        }
+
+        function stopArtistImageCarousel(zoneId) {
+            if (artistImageCarousels[zoneId]) {
+                clearInterval(artistImageCarousels[zoneId]);
+                delete artistImageCarousels[zoneId];
+            }
+        }
+
+        function toggleArtistImages(zoneId) {
+            const container = document.querySelector(`.artist-images[data-zone-id="${zoneId}"]`);
+            if (!container) return;
+
+            // Toggle visibility state (default is visible/true)
+            const isCurrentlyVisible = artistImagesVisible[zoneId] !== false;
+            artistImagesVisible[zoneId] = !isCurrentlyVisible;
+
+            if (artistImagesVisible[zoneId]) {
+                // Show images
+                container.classList.remove('hidden');
+                // Restart carousel if multiple images
+                const images = container.querySelectorAll('.artist-image');
+                if (images.length > 1) {
+                    startArtistImageCarousel(zoneId);
+                }
+            } else {
+                // Hide images
+                container.classList.add('hidden');
+                // Stop carousel when hidden
+                stopArtistImageCarousel(zoneId);
+            }
+        }
+
         function formatZoneName(zoneName) {
             // Check if zone name has output in parentheses
             const match = zoneName.match(/^(.+?)\s+\((.+)\)$/);
@@ -825,6 +914,11 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         </div>
                                     </div>
                                 </div>
+                                ${zone.artist_image_keys && zone.artist_image_keys.length > 0 ? `
+                                <div class="artist-images" data-zone-id="${zone.zone_id}" onclick="toggleArtistImages('${zone.zone_id}')">
+                                    ${zone.artist_image_keys.map((key, index) => `<img src="/image/${key}" class="artist-image ${index === 0 ? 'active' : ''}" data-index="${index}" alt="Artist" />`).join('')}
+                                </div>
+                                ` : ''}
                                 <div class="zone-controls-container">
                                     <div class="zone-name-label">${formatZoneName(zone.zone_name)}</div>
                                     <div class="zone-controls">
@@ -870,7 +964,15 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         function createZoneElement(zone) {
             const div = document.createElement('div');
             div.innerHTML = renderZone(zone);
-            return div.firstElementChild;
+            const element = div.firstElementChild;
+
+            // Start carousel for artist images if they exist
+            if (zone.artist_image_keys && zone.artist_image_keys.length > 1) {
+                // Use setTimeout to ensure DOM is ready
+                setTimeout(() => startArtistImageCarousel(zone.zone_id), 0);
+            }
+
+            return element;
         }
 
         // Update an existing zone element with new data
@@ -954,6 +1056,54 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         element.replaceWith(newElement);
                         return;
                     }
+                }
+
+                // Update artist images if changed
+                const artistImagesContainer = element.querySelector('.artist-images');
+                if (zone.artist_image_keys && zone.artist_image_keys.length > 0) {
+                    // Check if artist images changed
+                    const currentKeys = artistImagesContainer
+                        ? Array.from(artistImagesContainer.querySelectorAll('.artist-image'))
+                            .map(img => img.getAttribute('src').split('/').pop())
+                        : [];
+
+                    const newKeys = zone.artist_image_keys;
+                    const keysChanged = currentKeys.length !== newKeys.length ||
+                        !currentKeys.every((key, i) => key === newKeys[i]);
+
+                    if (keysChanged) {
+                        // Stop existing carousel
+                        stopArtistImageCarousel(zone.zone_id);
+
+                        if (artistImagesContainer) {
+                            // Preserve visibility state
+                            const wasHidden = artistImagesContainer.classList.contains('hidden');
+
+                            // Update existing container with carousel structure
+                            artistImagesContainer.innerHTML = zone.artist_image_keys
+                                .map((key, index) => `<img src="/image/${encodeURIComponent(key)}" class="artist-image ${index === 0 ? 'active' : ''}" data-index="${index}" alt="Artist" />`)
+                                .join('');
+
+                            // Restore visibility state
+                            if (wasHidden) {
+                                artistImagesContainer.classList.add('hidden');
+                            }
+
+                            // Start carousel if multiple images and visible
+                            if (zone.artist_image_keys.length > 1 && !wasHidden) {
+                                setTimeout(() => startArtistImageCarousel(zone.zone_id), 0);
+                            }
+                        } else {
+                            // Container doesn't exist, rebuild zone
+                            const newElement = createZoneElement(zone);
+                            element.replaceWith(newElement);
+                            return;
+                        }
+                    }
+                } else if (artistImagesContainer) {
+                    // No artist images but container exists, remove it and stop carousel
+                    stopArtistImageCarousel(zone.zone_id);
+                    artistImagesContainer.remove();
                 }
 
                 // Update play/pause button

@@ -25,6 +25,7 @@ pub struct WsZoneData {
     pub position_seconds: Option<i64>,
     pub length_seconds: Option<u32>,
     pub image_key: Option<String>,
+    pub artist_image_keys: Option<Vec<String>>,
     pub is_muted: Option<bool>,
     pub dcs_format: Option<String>,
     pub queue_items_remaining: i64,
@@ -163,7 +164,7 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
             };
 
             // Extract track info if available
-            let (track, artist, album, position_seconds, length_seconds, image_key) =
+            let (track, artist, album, position_seconds, length_seconds, image_key, artist_image_keys) =
                 if let Some(now_playing) = zone.now_playing.as_ref() {
                     let three_line = &now_playing.three_line;
                     (
@@ -181,9 +182,10 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                         now_playing.seek_position,
                         now_playing.length,
                         now_playing.image_key.clone(),
+                        now_playing.artist_image_keys.clone(),
                     )
                 } else {
-                    (None, None, None, None, None, None)
+                    (None, None, None, None, None, None, None)
                 };
 
             // Extract is_muted from the first output with volume info
@@ -217,6 +219,7 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                 position_seconds,
                 length_seconds,
                 image_key,
+                artist_image_keys,
                 is_muted,
                 dcs_format: dcs_format.clone(),
                 queue_items_remaining: zone.queue_items_remaining,
@@ -868,7 +871,7 @@ impl RoonClient {
                 };
 
                 // Extract track info if available
-                let (track, artist, album, position_seconds, length_seconds, image_key) =
+                let (track, artist, album, position_seconds, length_seconds, image_key, artist_image_keys) =
                     if let Some(now_playing) = zone.now_playing.as_ref() {
                         let three_line = &now_playing.three_line;
                         (
@@ -886,9 +889,10 @@ impl RoonClient {
                             now_playing.seek_position,
                             now_playing.length,
                             now_playing.image_key.clone(),
+                            now_playing.artist_image_keys.clone(),
                         )
                     } else {
-                        (None, None, None, None, None, None)
+                        (None, None, None, None, None, None, None)
                     };
 
                 // Extract is_muted from the first output with volume info
@@ -922,6 +926,7 @@ impl RoonClient {
                     position_seconds,
                     length_seconds,
                     image_key,
+                    artist_image_keys,
                     is_muted,
                     dcs_format,
                     queue_items_remaining: zone.queue_items_remaining,
