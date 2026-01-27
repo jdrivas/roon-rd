@@ -315,6 +315,20 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             font-size: 0.8rem;
             color: #777;
         }
+        .queue-info {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            font-size: 0.75rem;
+            color: #666;
+            margin-top: 6px;
+        }
+        .queue-count {
+            opacity: 0.8;
+        }
+        .queue-time {
+            opacity: 0.8;
+        }
         .no-playing {
             text-align: center;
             padding: 40px;
@@ -706,9 +720,15 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
         function formatTime(seconds) {
             if (seconds == null) return '0:00';
-            const mins = Math.floor(seconds / 60);
+            const hours = Math.floor(seconds / 3600);
+            const mins = Math.floor((seconds % 3600) / 60);
             const secs = Math.floor(seconds % 60);
-            return `${mins}:${secs.toString().padStart(2, '0')}`;
+
+            if (hours > 0) {
+                return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
+            } else {
+                return `${mins}:${secs.toString().padStart(2, '0')}`;
+            }
         }
 
         function formatZoneName(zoneName) {
@@ -791,6 +811,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         <div class="progress-time">
                                             <span class="current-time">${formatTime(zone.position_seconds)}</span>
                                             <span class="total-time" onclick="toggleTimeDisplay('${zone.zone_id}')" style="cursor: pointer;" title="Click to toggle between total time and time remaining">${formatTime(zone.length_seconds)}</span>
+                                        </div>
+                                        <div class="queue-info">
+                                            ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-count">${zone.queue_items_remaining} track${zone.queue_items_remaining !== 1 ? 's' : ''} in the queue</span>` : ''}
+                                            ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-time">${formatTime(zone.queue_time_remaining)} remaining</span>` : ''}
                                         </div>
                                     </div>
                                 </div>
@@ -1190,6 +1214,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             const progressFill = zoneElement.querySelector('.progress-fill');
             const currentTime = zoneElement.querySelector('.current-time');
             const totalTime = zoneElement.querySelector('.total-time');
+            const queueTimeElement = zoneElement.querySelector('.queue-time');
 
             // Find the zone data to get total length
             const zoneData = nowPlayingZones.find(z => z.zone_id === zoneId);
@@ -1215,6 +1240,15 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     totalTime.textContent = formatTime(remaining) + ' remaining';
                 } else {
                     totalTime.textContent = formatTime(length);
+                }
+            }
+
+            // Update queue time remaining (add remaining time of current track)
+            if (queueTimeElement && queueTimeRemaining != null && zoneData.queue_items_remaining > 0) {
+                const currentTrackRemaining = length - position;
+                const totalQueueTime = queueTimeRemaining + currentTrackRemaining;
+                if (totalQueueTime > 0) {
+                    queueTimeElement.textContent = `${formatTime(totalQueueTime)} remaining`;
                 }
             }
         }
@@ -1794,6 +1828,9 @@ struct QueueItemInfo {
     album: Option<String>,
     length: u32,
     image_key: Option<String>,
+    one_line: String,
+    two_line_1: String,
+    two_line_2: String,
 }
 
 #[derive(Serialize)]
@@ -1827,6 +1864,9 @@ async fn queue_handler(
                 None
             },
             length: item.length,
+            one_line: item.one_line.line1.clone(),
+            two_line_1: item.two_line.line1.clone(),
+            two_line_2: item.two_line.line2.clone(),
             image_key: item.image_key,
         }
     }).collect();

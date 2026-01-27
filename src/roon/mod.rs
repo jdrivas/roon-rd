@@ -27,6 +27,8 @@ pub struct WsZoneData {
     pub image_key: Option<String>,
     pub is_muted: Option<bool>,
     pub dcs_format: Option<String>,
+    pub queue_items_remaining: i64,
+    pub queue_time_remaining: i64,
 }
 
 /// Message types for WebSocket updates
@@ -206,7 +208,7 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
             };
 
             let ws_data = WsZoneData {
-                zone_id: zone.zone_id,
+                zone_id: zone.zone_id.clone(),
                 zone_name: zone_name.clone(),
                 state: format!("{:?}", zone.state),
                 track: track.clone(),
@@ -217,6 +219,8 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                 image_key,
                 is_muted,
                 dcs_format: dcs_format.clone(),
+                queue_items_remaining: zone.queue_items_remaining,
+                queue_time_remaining: zone.queue_time_remaining,
             };
 
             log::debug!("Built WsZoneData for {}: track={:?}, dcs_format={:?}",
@@ -909,7 +913,7 @@ impl RoonClient {
                 };
 
                 WsZoneData {
-                    zone_id: zone.zone_id,
+                    zone_id: zone.zone_id.clone(),
                     zone_name,
                     state: format!("{:?}", zone.state),
                     track,
@@ -920,6 +924,8 @@ impl RoonClient {
                     image_key,
                     is_muted,
                     dcs_format,
+                    queue_items_remaining: zone.queue_items_remaining,
+                    queue_time_remaining: zone.queue_time_remaining,
                 }
             }
         }).collect();
