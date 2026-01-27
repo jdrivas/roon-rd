@@ -1,6 +1,6 @@
 [package]
 name = "roon-rd"
-version = "1.4.1"
+version = "1.4.2"
 edition = "2021"
 authors = ["Momentlabs <david@momentlabs.io>"]
 repository = "https://github.com/jdrivas/roon-rd"
