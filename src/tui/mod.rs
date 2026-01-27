@@ -307,6 +307,8 @@ pub struct App {
     maximized_window: MaximizedWindow,
     /// Whether help popup is showing
     show_help: bool,
+    /// Current page in help popup (0-based)
+    help_page: usize,
 }
 
 impl App {
@@ -336,6 +338,7 @@ impl App {
             completion_index: None,
             maximized_window: MaximizedWindow::None,
             show_help: false,
+            help_page: 0,
         }
     }
 
@@ -523,6 +526,20 @@ impl App {
                     self.input.remove(self.cursor_position);
                 }
                 self.reset_completion();
+                None
+            }
+            // Left/Right arrows - navigate help pages when help is showing (must come before cursor movement)
+            (KeyCode::Left, _) | (KeyCode::PageUp, _) if self.show_help => {
+                if self.help_page > 0 {
+                    self.help_page -= 1;
+                }
+                None
+            }
+            (KeyCode::Right, _) | (KeyCode::PageDown, _) if self.show_help => {
+                // Max page is 3 (0-indexed, so pages 0,1,2,3)
+                if self.help_page < 3 {
+                    self.help_page += 1;
+                }
                 None
             }
             // Left arrow - move cursor left
@@ -1103,82 +1120,253 @@ impl App {
         use ratatui::style::{Color, Style};
         use ratatui::text::{Line, Span};
 
-        // Create help content with colors suitable for white background
-        let help_lines = vec![
-            Line::from(Span::styled("Keyboard Shortcuts", Style::default().fg(Color::Blue))),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Ctrl+H", Style::default().fg(Color::Magenta)),
-                Span::styled("         Toggle this help popup", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+Z", Style::default().fg(Color::Magenta)),
-                Span::styled("         Maximize/restore Zones window", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+E", Style::default().fg(Color::Magenta)),
-                Span::styled("         Maximize/restore Events window", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+O", Style::default().fg(Color::Magenta)),
-                Span::styled("         Maximize/restore Output window", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("ESC", Style::default().fg(Color::Magenta)),
-                Span::styled("            Restore normal layout / Close popup", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("Up/Down", Style::default().fg(Color::Magenta)),
-                Span::styled("        Scroll output window", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Alt+Up/Down", Style::default().fg(Color::Magenta)),
-                Span::styled("    Scroll events window", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+Up/Down", Style::default().fg(Color::Magenta)),
-                Span::styled("   Browse command history", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Tab", Style::default().fg(Color::Magenta)),
-                Span::styled("            Command completion", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("Ctrl+C/Ctrl+D", Style::default().fg(Color::Magenta)),
-                Span::styled("  Exit", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Common Commands", Style::default().fg(Color::Blue))),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("status", Style::default().fg(Color::DarkGray)),
-                Span::styled("          Show connection status", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("zones", Style::default().fg(Color::DarkGray)),
-                Span::styled("           List available zones", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("help", Style::default().fg(Color::DarkGray)),
-                Span::styled("            Show all commands", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("verbose", Style::default().fg(Color::DarkGray)),
-                Span::styled("         Toggle verbose logging", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(""),
-            Line::from(vec![
-                Span::styled("dcs-playing", Style::default().fg(Color::DarkGray)),
-                Span::styled("     Get dCS playback info", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(vec![
-                Span::styled("dcs-format", Style::default().fg(Color::DarkGray)),
-                Span::styled("      Get dCS audio format", Style::default().fg(Color::Black)),
-            ]),
-            Line::from(""),
-            Line::from(Span::styled("Press ESC to close", Style::default().fg(Color::DarkGray))),
-        ];
+        // Create help content based on current page
+        let (help_lines, page_title) = match self.help_page {
+            0 => {
+                // Page 1: Keyboard Shortcuts
+                (vec![
+                    Line::from(Span::styled("Window Control", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("Ctrl+H", Style::default().fg(Color::Magenta)),
+                        Span::styled("         Toggle this help popup", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Ctrl+Z", Style::default().fg(Color::Magenta)),
+                        Span::styled("         Maximize/restore Zones window", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Ctrl+E", Style::default().fg(Color::Magenta)),
+                        Span::styled("         Maximize/restore Events window", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Ctrl+O", Style::default().fg(Color::Magenta)),
+                        Span::styled("         Maximize/restore Output window", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("ESC", Style::default().fg(Color::Magenta)),
+                        Span::styled("            Restore normal layout / Close popup", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Navigation", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("Up/Down", Style::default().fg(Color::Magenta)),
+                        Span::styled("        Scroll output window", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Alt+Up/Down", Style::default().fg(Color::Magenta)),
+                        Span::styled("    Scroll events window", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Ctrl+Up/Down", Style::default().fg(Color::Magenta)),
+                        Span::styled("   Browse command history", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Left/Right", Style::default().fg(Color::Magenta)),
+                        Span::styled("      Navigate help pages", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("PgUp/PgDn", Style::default().fg(Color::Magenta)),
+                        Span::styled("       Navigate help pages", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Input", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("Tab", Style::default().fg(Color::Magenta)),
+                        Span::styled("            Command completion", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("Ctrl+C/Ctrl+D", Style::default().fg(Color::Magenta)),
+                        Span::styled("  Exit application", Style::default().fg(Color::Black)),
+                    ]),
+                ], "Keyboard Shortcuts")
+            },
+            1 => {
+                // Page 2: Roon Commands
+                (vec![
+                    Line::from(Span::styled("Connection & Status", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("status", Style::default().fg(Color::DarkGray)),
+                        Span::styled("          Show connection status", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("zones", Style::default().fg(Color::DarkGray)),
+                        Span::styled("           List available zones", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("help", Style::default().fg(Color::DarkGray)),
+                        Span::styled("            Show all commands", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("verbose", Style::default().fg(Color::DarkGray)),
+                        Span::styled("         Toggle verbose logging", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Playback Control", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("play", Style::default().fg(Color::DarkGray)),
+                        Span::styled("            Start playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("pause", Style::default().fg(Color::DarkGray)),
+                        Span::styled("           Pause playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("playpause", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Toggle play/pause", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("stop", Style::default().fg(Color::DarkGray)),
+                        Span::styled("            Stop playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("next", Style::default().fg(Color::DarkGray)),
+                        Span::styled("            Skip to next track", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("previous", Style::default().fg(Color::DarkGray)),
+                        Span::styled("        Skip to previous track", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Volume Control", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("volume <0-100>", Style::default().fg(Color::DarkGray)),
+                        Span::styled("  Set volume level", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("mute", Style::default().fg(Color::DarkGray)),
+                        Span::styled("            Mute/unmute volume", Style::default().fg(Color::Black)),
+                    ]),
+                ], "Roon Commands")
+            },
+            2 => {
+                // Page 3: UPnP Commands
+                (vec![
+                    Line::from(Span::styled("Discovery", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("upnp-discover", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   Discover UPnP devices", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-list", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       List discovered devices", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Device Information", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("upnp-info <dev>", Style::default().fg(Color::DarkGray)),
+                        Span::styled(" Get device information", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-services", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   List available services", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Renderer Control", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("upnp-play", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Start renderer playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-pause", Style::default().fg(Color::DarkGray)),
+                        Span::styled("      Pause renderer playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-stop", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Stop renderer playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-next", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Skip to next track", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-previous", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   Skip to previous track", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Status", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("upnp-status", Style::default().fg(Color::DarkGray)),
+                        Span::styled("     Get transport status", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("upnp-position", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   Get playback position", Style::default().fg(Color::Black)),
+                    ]),
+                ], "UPnP Commands")
+            },
+            3 => {
+                // Page 4: dCS Commands
+                (vec![
+                    Line::from(Span::styled("Playback Information", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("dcs-playing", Style::default().fg(Color::DarkGray)),
+                        Span::styled("     Get current playback info", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-format", Style::default().fg(Color::DarkGray)),
+                        Span::styled("      Get audio format details", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-state", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Get playback state", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Device Control", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("dcs-play", Style::default().fg(Color::DarkGray)),
+                        Span::styled("        Start playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-pause", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Pause playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-stop", Style::default().fg(Color::DarkGray)),
+                        Span::styled("        Stop playback", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-next", Style::default().fg(Color::DarkGray)),
+                        Span::styled("        Skip to next track", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-previous", Style::default().fg(Color::DarkGray)),
+                        Span::styled("    Skip to previous track", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
+                    Line::from(Span::styled("Audio Settings", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("dcs-input", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Get current input", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-input <in>", Style::default().fg(Color::DarkGray)),
+                        Span::styled("  Set input (network/aes1/spdif)", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-upsampler", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   Get upsampler settings", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-filter", Style::default().fg(Color::DarkGray)),
+                        Span::styled("      Get filter settings", Style::default().fg(Color::Black)),
+                    ]),
+                ], "dCS Commands")
+            },
+            _ => (vec![Line::from("Invalid page")], "Error"),
+        };
 
         // Calculate popup size (80% of screen, centered)
         let area = f.area();
@@ -1200,8 +1388,9 @@ impl App {
 
         // Render the popup with very subtle light gray background
         // Using RGB(245, 245, 245) - just slightly darker than white (255,255,255)
+        let title = format!(" Help - {} (Page {} of 4) ", page_title, self.help_page + 1);
         let block = Block::default()
-            .title(" Help - Keyboard Shortcuts & Commands ")
+            .title(title)
             .borders(Borders::ALL)
             .style(Style::default().bg(Color::Rgb(245, 245, 245)).fg(Color::Black));
 
