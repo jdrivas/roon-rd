@@ -315,19 +315,26 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             font-size: 0.8rem;
             color: #777;
         }
+        .current-time, .total-time {
+            font-family: 'Courier New', Courier, monospace;
+        }
         .queue-info {
             display: flex;
             justify-content: space-between;
             align-items: center;
             font-size: 0.75rem;
             color: #666;
-            margin-top: 6px;
+            margin-top: -2px;
         }
         .queue-count {
             opacity: 0.8;
         }
         .queue-time {
             opacity: 0.8;
+            font-size: 0.75rem;
+        }
+        .queue-time-value {
+            font-family: 'Courier New', Courier, monospace;
         }
         .no-playing {
             text-align: center;
@@ -727,7 +734,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             if (hours > 0) {
                 return `${hours}:${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
             } else {
-                return `${mins}:${secs.toString().padStart(2, '0')}`;
+                return `${mins.toString().padStart(2, '0')}:${secs.toString().padStart(2, '0')}`;
             }
         }
 
@@ -814,7 +821,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         </div>
                                         <div class="queue-info">
                                             ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-count">${zone.queue_items_remaining} track${zone.queue_items_remaining !== 1 ? 's' : ''} in the queue</span>` : ''}
-                                            ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-time">${formatTime(zone.queue_time_remaining)} remaining</span>` : ''}
+                                            ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-time"><span class="queue-time-value">${formatTime(zone.queue_time_remaining)}</span> remaining</span>` : ''}
                                         </div>
                                     </div>
                                 </div>
@@ -1248,7 +1255,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const currentTrackRemaining = length - position;
                 const totalQueueTime = queueTimeRemaining + currentTrackRemaining;
                 if (totalQueueTime > 0) {
-                    queueTimeElement.textContent = `${formatTime(totalQueueTime)} remaining`;
+                    queueTimeElement.innerHTML = `<span class="queue-time-value">${formatTime(totalQueueTime)}</span> remaining`;
                 }
             }
         }
