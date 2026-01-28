@@ -21,14 +21,14 @@ use chrono::Local;
 const DEFAULT_DCS_HOST: &str = "dcs-vivaldi.local";
 
 /// Command metadata with name and help text
-struct CommandInfo {
-    name: &'static str,
-    description: &'static str,
-    usage: Option<&'static str>,
+pub struct CommandInfo {
+    pub name: &'static str,
+    pub description: &'static str,
+    pub usage: Option<&'static str>,
 }
 
 /// Central command definitions
-fn get_command_definitions() -> Vec<CommandInfo> {
+pub fn get_command_definitions() -> Vec<CommandInfo> {
     vec![
         // General commands
         CommandInfo { name: "help", description: "Show available commands", usage: None },

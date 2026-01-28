@@ -1193,6 +1193,10 @@ impl App {
                         Span::styled("          Show connection status", Style::default().fg(Color::Black)),
                     ]),
                     Line::from(vec![
+                        Span::styled("reconnect", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Reconnect to Roon Core", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
                         Span::styled("zones", Style::default().fg(Color::DarkGray)),
                         Span::styled("           List available zones", Style::default().fg(Color::Black)),
                     ]),
