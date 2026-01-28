@@ -1729,6 +1729,39 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                 return;
             }
 
+            // Handle reconnect command (needs mutable access)
+            if command.trim() == "reconnect" {
+                if let Some(ref client) = client_clone {
+                    let mut buffer = buffer_for_commands.lock().unwrap();
+                    buffer.push("".to_string());
+                    buffer.push("  Reconnecting to Roon Core...".to_string());
+                    drop(buffer); // Release lock before async operation
+
+                    let mut client_guard = client.lock().await;
+                    match client_guard.reconnect().await {
+                        Ok(_) => {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push("  Successfully reconnected".to_string());
+                            if let Some(name) = client_guard.get_core_name().await {
+                                buffer.push(format!("  Core: {}", name));
+                            }
+                            buffer.push("".to_string());
+                        }
+                        Err(e) => {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push(format!("  Reconnection failed: {}", e));
+                            buffer.push("".to_string());
+                        }
+                    }
+                } else {
+                    let mut buffer = buffer_for_commands.lock().unwrap();
+                    buffer.push("".to_string());
+                    buffer.push("  Error: Roon commands require connection. Remove --upnp-only flag.".to_string());
+                    buffer.push("".to_string());
+                }
+                return;
+            }
+
             // Execute other commands through existing handler with buffer output
             // Lock already released above
 
