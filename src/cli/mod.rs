@@ -20,6 +20,57 @@ use chrono::Local;
 /// Default hostname for dCS devices when not specified
 const DEFAULT_DCS_HOST: &str = "dcs-vivaldi.local";
 
+/// Command metadata with name and help text
+struct CommandInfo {
+    name: &'static str,
+    description: &'static str,
+    usage: Option<&'static str>,
+}
+
+/// Central command definitions
+fn get_command_definitions() -> Vec<CommandInfo> {
+    vec![
+        // General commands
+        CommandInfo { name: "help", description: "Show available commands", usage: None },
+        CommandInfo { name: "quit", description: "Exit interactive mode", usage: None },
+        CommandInfo { name: "exit", description: "Exit interactive mode", usage: None },
+        CommandInfo { name: "verbose", description: "Toggle verbose logging or set level", usage: Some("[off|error|warn|info|debug|trace]") },
+        CommandInfo { name: "version", description: "Show version information", usage: None },
+
+        // Roon commands
+        CommandInfo { name: "status", description: "Show connection status", usage: None },
+        CommandInfo { name: "reconnect", description: "Reconnect to Roon Core", usage: None },
+        CommandInfo { name: "zones", description: "List available zones", usage: None },
+        CommandInfo { name: "now-playing", description: "Show currently playing tracks", usage: None },
+        CommandInfo { name: "queue", description: "Show queue for zone (defaults to first playing zone)", usage: Some("[zone]") },
+        CommandInfo { name: "play", description: "Start playback in zone", usage: Some("<zone_id>") },
+        CommandInfo { name: "pause", description: "Pause playback in zone", usage: Some("<zone_id>") },
+        CommandInfo { name: "stop", description: "Stop playback in zone", usage: Some("<zone_id>") },
+        CommandInfo { name: "mute", description: "Toggle mute for zone", usage: Some("<zone_id>") },
+
+        // UPnP commands
+        CommandInfo { name: "upnp-discover", description: "Discover all UPnP devices on network", usage: None },
+        CommandInfo { name: "upnp-renderers", description: "Discover UPnP MediaRenderer devices", usage: None },
+        CommandInfo { name: "upnp-info", description: "Get detailed device information", usage: Some("<url>") },
+        CommandInfo { name: "upnp-xml", description: "Get raw device XML description", usage: Some("<url>") },
+        CommandInfo { name: "upnp-service", description: "Get service description XML (SCPD)", usage: Some("<url> <service>") },
+        CommandInfo { name: "upnp-position", description: "Get current playback position and metadata", usage: Some("<url>") },
+        CommandInfo { name: "upnp-state", description: "Get current playback state (playing/paused/stopped)", usage: Some("<url>") },
+        CommandInfo { name: "upnp-playing", description: "Get comprehensive now playing info (state, track, format)", usage: Some("<url>") },
+
+        // dCS API commands
+        CommandInfo { name: "dcs-playing", description: "Get current playback info (track, artist, album, format)", usage: Some("<host>") },
+        CommandInfo { name: "dcs-format", description: "Get current audio format (sample rate, bit depth, input)", usage: Some("<host>") },
+        CommandInfo { name: "dcs-settings", description: "Get device settings (display, sync mode)", usage: Some("<host>") },
+        CommandInfo { name: "dcs-upsampler", description: "Get upsampler settings (output rate, filter)", usage: Some("<host>") },
+        CommandInfo { name: "dcs-inputs", description: "Get current and available digital inputs", usage: Some("<host>") },
+        CommandInfo { name: "dcs-playmode", description: "Get current play mode (Network, USB, etc)", usage: Some("<host>") },
+        CommandInfo { name: "dcs-menu", description: "Get available menu options for device", usage: Some("<host>") },
+        CommandInfo { name: "dcs-set-brightness", description: "Set display brightness (0-4)", usage: Some("<host> <level>") },
+        CommandInfo { name: "dcs-set-display", description: "Set display mode (on/off)", usage: Some("<host> <on|off>") },
+    ]
+}
+
 /// Command completer for interactive mode
 struct CommandCompleter {
     commands: Vec<String>,
@@ -27,49 +78,18 @@ struct CommandCompleter {
 
 impl CommandCompleter {
     fn new(include_roon_commands: bool) -> Self {
-        let mut commands = vec![
-            // General commands
-            "help".to_string(),
-            "quit".to_string(),
-            "exit".to_string(),
-            "verbose".to_string(),
-            "version".to_string(),
-            // UPnP commands
-            "upnp-discover".to_string(),
-            "upnp-renderers".to_string(),
-            "upnp-info".to_string(),
-            "upnp-xml".to_string(),
-            "upnp-service".to_string(),
-            "upnp-position".to_string(),
-            "upnp-state".to_string(),
-            "upnp-playing".to_string(),
-            // dCS API commands
-            "dcs-playing".to_string(),
-            "dcs-format".to_string(),
-            "dcs-settings".to_string(),
-            "dcs-upsampler".to_string(),
-            "dcs-inputs".to_string(),
-            "dcs-playmode".to_string(),
-            "dcs-menu".to_string(),
-            "dcs-set-brightness".to_string(),
-            "dcs-set-display".to_string(),
-        ];
+        let definitions = get_command_definitions();
+        let roon_commands = ["status", "reconnect", "zones", "now-playing", "queue", "play", "pause", "stop", "mute"];
 
-        if include_roon_commands {
-            // Roon commands
-            commands.extend(vec![
-                "status".to_string(),
-                "zones".to_string(),
-                "now-playing".to_string(),
-                "queue".to_string(),
-                "play".to_string(),
-                "pause".to_string(),
-                "stop".to_string(),
-                "mute".to_string(),
-            ]);
-        }
+        let commands: Vec<String> = definitions
+            .iter()
+            .filter(|cmd| {
+                // Include all non-Roon commands, or include Roon commands if requested
+                !roon_commands.contains(&cmd.name) || include_roon_commands
+            })
+            .map(|cmd| cmd.name.to_string())
+            .collect();
 
-        commands.sort();
         Self { commands }
     }
 }
@@ -472,45 +492,52 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
             Ok(())
         }
         "help" => {
+            let definitions = get_command_definitions();
+
             out.writeln("".to_string());
             out.writeln("  Available commands:".to_string());
             out.writeln("".to_string());
+
+            // Group commands by category
+            let general_cmds = ["help", "quit", "exit", "verbose", "version"];
+            let roon_cmds = ["status", "reconnect", "zones", "now-playing", "queue", "play", "pause", "stop", "mute"];
+            let upnp_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("upnp-")).collect();
+            let dcs_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("dcs-")).collect();
+
+            // Roon Commands
             out.writeln("  Roon Commands:".to_string());
-            out.writeln("    status             - Show connection status".to_string());
-            out.writeln("    zones              - List available zones".to_string());
-            out.writeln("    now-playing        - Show currently playing tracks".to_string());
-            out.writeln("    queue [zone]       - Show queue for zone (defaults to first playing zone)".to_string());
-            out.writeln("    play <zone_id>     - Start playback in zone".to_string());
-            out.writeln("    pause <zone_id>    - Pause playback in zone".to_string());
-            out.writeln("    stop <zone_id>     - Stop playback in zone".to_string());
-            out.writeln("    mute <zone_id>     - Toggle mute for zone".to_string());
+            for cmd_name in &roon_cmds {
+                if let Some(cmd) = definitions.iter().find(|c| c.name == *cmd_name) {
+                    let usage = cmd.usage.map(|u| format!(" {}", u)).unwrap_or_default();
+                    out.writeln(format!("    {:<18}{} - {}", cmd.name.to_string() + &usage, "", cmd.description));
+                }
+            }
             out.writeln("".to_string());
+
+            // UPnP Commands
             out.writeln("  UPnP Commands:".to_string());
-            out.writeln("    upnp-discover      - Discover all UPnP devices on network".to_string());
-            out.writeln("    upnp-renderers     - Discover UPnP MediaRenderer devices".to_string());
-            out.writeln("    upnp-info <url>    - Get detailed device information".to_string());
-            out.writeln("    upnp-xml <url>     - Get raw device XML description".to_string());
-            out.writeln("    upnp-service <url> <service> - Get service description XML (SCPD)".to_string());
-            out.writeln("    upnp-position <url> - Get current playback position and metadata".to_string());
-            out.writeln("    upnp-state <url>   - Get current playback state (playing/paused/stopped)".to_string());
-            out.writeln("    upnp-playing <url> - Get comprehensive now playing info (state, track, format)".to_string());
+            for cmd in upnp_cmds {
+                let usage = cmd.usage.map(|u| format!(" {}", u)).unwrap_or_default();
+                out.writeln(format!("    {:<18}{} - {}", cmd.name.to_string() + &usage, "", cmd.description));
+            }
             out.writeln("".to_string());
+
+            // dCS API Commands
             out.writeln("  dCS API Commands:".to_string());
-            out.writeln("    dcs-playing <host>  - Get current playback info (track, artist, album, format)".to_string());
-            out.writeln("    dcs-format <host>   - Get current audio format (sample rate, bit depth, input)".to_string());
-            out.writeln("    dcs-settings <host> - Get device settings (display, sync mode)".to_string());
-            out.writeln("    dcs-upsampler <host> - Get upsampler settings (output rate, filter)".to_string());
-            out.writeln("    dcs-inputs <host>   - Get current and available digital inputs".to_string());
-            out.writeln("    dcs-playmode <host> - Get current playback mode".to_string());
-            out.writeln("    dcs-menu <host> <path> - Browse menu hierarchy".to_string());
-            out.writeln("    dcs-set-brightness <host> <0-15> - Set display brightness".to_string());
-            out.writeln("    dcs-set-display <host> <on|off> - Turn display on/off".to_string());
+            for cmd in dcs_cmds {
+                let usage = cmd.usage.map(|u| format!(" {}", u)).unwrap_or_default();
+                out.writeln(format!("    {:<18}{} - {}", cmd.name.to_string() + &usage, "", cmd.description));
+            }
             out.writeln("".to_string());
+
+            // General Commands
             out.writeln("  General:".to_string());
-            out.writeln("    verbose            - Toggle verbose logging on/off".to_string());
-            out.writeln("    version            - Show version information".to_string());
-            out.writeln("    help               - Show this help message".to_string());
-            out.writeln("    quit               - Exit interactive mode".to_string());
+            for cmd_name in &general_cmds {
+                if let Some(cmd) = definitions.iter().find(|c| c.name == *cmd_name) {
+                    let usage = cmd.usage.map(|u| format!(" {}", u)).unwrap_or_default();
+                    out.writeln(format!("    {:<18}{} - {}", cmd.name.to_string() + &usage, "", cmd.description));
+                }
+            }
             out.writeln("".to_string());
             Ok(())
         }
@@ -1364,6 +1391,33 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                     continue;
                 }
 
+                // Handle reconnect command specially (needs mutable access)
+                if command == "reconnect" {
+                    if let Some(ref client) = client {
+                        println!();
+                        println!("  Reconnecting to Roon Core...");
+
+                        let mut client_guard = client.lock().await;
+                        match client_guard.reconnect().await {
+                            Ok(_) => {
+                                println!("  Successfully reconnected");
+                                if let Some(name) = client_guard.get_core_name().await {
+                                    println!("  Core: {}", name);
+                                }
+                            }
+                            Err(e) => {
+                                println!("  Reconnection failed: {}", e);
+                            }
+                        }
+                        println!();
+                    } else {
+                        println!();
+                        println!("  {} Roon commands require connection. Remove --upnp-only flag.", "Error:".bold().red());
+                        println!();
+                    }
+                    continue;
+                }
+
                 // Execute the command
                 if let Some(ref client) = client {
                     let client = client.lock().await;
@@ -1558,6 +1612,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
         // Roon commands
         commands.extend(vec![
             "status".to_string(),
+            "reconnect".to_string(),
             "zones".to_string(),
             "now-playing".to_string(),
             "queue".to_string(),
