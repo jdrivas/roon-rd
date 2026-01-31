@@ -838,6 +838,51 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             return zoneName;
         }
 
+        function formatTrackTitle(title) {
+            if (!title) return '';
+            
+            // Short titles don't need formatting
+            if (title.length < 20) return title;
+            
+            let mainPart = title;
+            let bracketedSuffix = '';
+            
+            // Case 2: Extract bracketed text at end (e.g., "[2019 Remaster]" or "(Remastered 2020)")
+            // Match square brackets containing anything, or parentheses with remaster-related keywords
+            const bracketMatch = title.match(/^(.+?)\s*(\[[^\]]+\]|\((?:[^)]*(?:Remaster|Version|Edition|Mix|Recording|Live|Mono|Stereo|Deluxe|Anniversary|Bonus|Original|Digital|Session Demo)[^)]*)\))$/i);
+            if (bracketMatch) {
+                mainPart = bracketMatch[1].trim();
+                bracketedSuffix = bracketMatch[2];
+            }
+            
+            // Case 1: Classical music pattern - "<Piece Name>, <Catalogue Number>: <Movement Number>. <Movement Name>"
+            // Break at colon before movement number (Roman or Arabic numerals)
+            let formattedMain = mainPart;
+            const classicalMatch = mainPart.match(/^(.+?:\s*)((?:M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})|\d+)\..*)$/i);
+            
+            if (classicalMatch) {
+                // Break before the movement number, keeping colon with piece/catalogue
+                const pieceAndCatalogue = classicalMatch[1].trim();
+                const movement = classicalMatch[2].trim();
+                formattedMain = pieceAndCatalogue + '<br>' + movement;
+            } else {
+                // Fallback: break at comma if no classical pattern found
+                const commaIndex = mainPart.indexOf(',');
+                if (commaIndex > 20 && commaIndex < mainPart.length - 10) {
+                    const beforeComma = mainPart.substring(0, commaIndex + 1).trim();
+                    const afterComma = mainPart.substring(commaIndex + 1).trim();
+                    formattedMain = beforeComma + '<br>' + afterComma;
+                }
+            }
+            
+            // Add bracketed suffix on its own line if present
+            if (bracketedSuffix) {
+                return formattedMain + '<br><span style="font-size: 0.85em; opacity: 0.8;">' + bracketedSuffix + '</span>';
+            }
+            
+            return formattedMain;
+        }
+
         function renderZone(zone) {
             const stateClass = zone.state.toLowerCase();
 
@@ -895,7 +940,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             <div class="track-details">
                                 <div class="track-details-top">
                                     <div class="track-info">
-                                        <div class="track-title">${zone.track}</div>
+                                        <div class="track-title">${formatTrackTitle(zone.track)}</div>
                                         ${zone.artist ? `<div class="track-artist">${zone.artist}</div>` : ''}
                                         ${zone.album ? `<div class="track-album">${zone.album}</div>` : ''}
                                         <div class="track-format">${zone.dcs_format || ''}</div>
@@ -1014,7 +1059,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const progressTimes = element.querySelectorAll('.progress-time span');
                 const albumArt = element.querySelector('.album-art, .album-art-placeholder');
 
-                if (trackTitle) trackTitle.textContent = zone.track;
+                if (trackTitle) trackTitle.innerHTML = formatTrackTitle(zone.track);
                 if (trackArtist) trackArtist.textContent = zone.artist || '';
                 if (trackAlbum) trackAlbum.textContent = zone.album || '';
                 // Only update track format if we have format data

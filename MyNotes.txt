@@ -1,0 +1,56 @@
+MyNotes.txt
+
+
+Don't make any change in code for a bit here and let's not worry about the multiple browser tabs for the 
+moment. 
+
+I'd like to get basic functionality working. 
+
+Watching the logs, it's clear to me that we are not getting a timely response from the
+dcs get audio format message - it contains the previous sample rate long after a change has been made. 
+I'm not sure why this is the case. 
+
+One thing that I noticed is that in the dcs:get_audio_format() call, we seem to make three separate 
+network calls to the dcs API one each for bit_depth, sample_rate, and input mode. 
+I wonder if we could just make one call to get all three value. 
+
+This is in distinction to dcs:get_playback_info which only makes cone, call _and_ gets audio 
+format information back along with track information. 
+
+
+Prompt:
+
+Don't make any change in code for a bit here and let's not worry about the multiple browser tabs for the 
+moment. 
+
+I'd like to get basic functionality working.
+
+I have some questions:
+
+1. Why do we make three calls to the dcs API in dcs:get_audio_format(), on each for bit_depth, 
+sample_rate, and input_mode? Can we make one call and get all of that information at the same time?
+
+2. Also, we seem to make one call in dcs:get_playback_info() to get quite a lot of data, 
+including the audio_format.
+
+3. Finally, I've noticed that the log messages that appear for the dcs:get_audio_format() calls, 
+often have the previous sample rate in them. Is there any reason that this should happen, other than the dcs:get_audio_format()
+not updating very fast?
+
+
+//
+* QUEUE
+*/
+Done: Let's get the total time remaining in the queue, along with the queue elements 
+that are in the queue displayed below the progress bar.
+
+// TUI
+DONE * Add a state and default for the dcs. It should default 
+to dcs-vivaldi.local and all the dcs commands should assume that if no endpoint is provided.
+
+DONE * Get more data from this TUI 
+    o Make sure the functions that are being called displapy ALL the information available.
+    o Add roon event handling to update a simple display (at the top window) of current state
+    o Add a debugging view that shows the events as they come in. INFO, should only show basic events,
+      DEBUG should show everything in the event as it comes through.
+

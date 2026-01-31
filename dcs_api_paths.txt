@@ -1,0 +1,289 @@
+=== dCS Vivaldi Comprehensive API Discovery ===
+Started: Wed Jan 21 18:08:00 PST 2026
+
+=== CONFIRMED WORKING PATHS ===
+
+✓ network:state
+  [
+      {
+          "networkState": "up",
+          "type": "networkState"
+      }
+  ]
+
+✓ network:state/current_state
+  [
+      {
+          "networkProfile": {
+              "wired": {
+                  "dhcp": true,
+                  "dns": [
+                      "192.168.50.1"
+                  ],
+                  "gateway": "192.168.50.1",
+                  "ip": "192.168.50.31",
+                  "netmask": "255.255.255.0",
+                  "name": "eth0",
+                  "connected": true
+              }
+          },
+          "type": "networkProfile"
+      }
+  ]
+
+✓ settings:/deviceName
+  [
+      {
+          "string_": "dCS Vivaldi Upsampler",
+          "type": "string_"
+      }
+  ]
+
+✓ settings:/airplay/password
+  [
+      {
+          "string_": "",
+          "type": "string_"
+      }
+  ]
+
+✓ firmwareUpdate:updateStatus
+  [
+      {
+          "firmwareUpdateStatus": {
+              "downloadProgress": 0,
+              "firmwareSource": {
+                  "version": "529",
+                  "url": "http://dcsfwupdate.co.uk/mfw/"
+              },
+              "exitMessage": {
+                  "text": "Firmware update check succeeded",
+                  "isError": false
+              },
+              "state": "newUpdateAvailable"
+          },
+          "type": "firmwareUpdateStatus"
+      }
+  ]
+
+
+=== TESTING SETTINGS PATHS ===
+
+✓ settings:/upsampler
+  [
+      null
+  ]
+
+✓ settings:/filter
+  [
+      null
+  ]
+
+✓ settings:/display
+  [
+      null
+  ]
+
+✓ settings:/brightness
+  [
+      null
+  ]
+
+✓ settings:/outputRate
+  [
+      null
+  ]
+
+✓ settings:/output
+  [
+      null
+  ]
+
+✓ settings:/input
+  [
+      null
+  ]
+
+✓ settings:/source
+  [
+      null
+  ]
+
+✓ settings:/volume
+  [
+      null
+  ]
+
+✓ settings:/mute
+  [
+      null
+  ]
+
+✓ settings:/audioFormat
+  [
+      null
+  ]
+
+✓ settings:/sampleRate
+  [
+      null
+  ]
+
+✓ settings:/bitDepth
+  [
+      null
+  ]
+
+
+=== TESTING NESTED SETTINGS ===
+
+✓ settings:/upsampler/rate
+  [
+      null
+  ]
+
+✓ settings:/upsampler/filter
+  [
+      null
+  ]
+
+✓ settings:/upsampler/brightness
+  [
+      null
+  ]
+
+✓ settings:/upsampler/state
+  [
+      null
+  ]
+
+✓ settings:/upsampler/config
+  [
+      null
+  ]
+
+✓ settings:/upsampler/output
+  [
+      null
+  ]
+
+✓ settings:/upsampler/input
+  [
+      null
+  ]
+
+✓ settings:/dac/rate
+  [
+      null
+  ]
+
+✓ settings:/dac/filter
+  [
+      null
+  ]
+
+✓ settings:/dac/brightness
+  [
+      null
+  ]
+
+✓ settings:/dac/state
+  [
+      null
+  ]
+
+✓ settings:/dac/config
+  [
+      null
+  ]
+
+✓ settings:/dac/output
+  [
+      null
+  ]
+
+✓ settings:/dac/input
+  [
+      null
+  ]
+
+✓ settings:/display/rate
+  [
+      null
+  ]
+
+✓ settings:/display/filter
+  [
+      null
+  ]
+
+✓ settings:/display/brightness
+  [
+      null
+  ]
+
+✓ settings:/display/state
+  [
+      null
+  ]
+
+✓ settings:/display/config
+  [
+      null
+  ]
+
+✓ settings:/display/output
+  [
+      null
+  ]
+
+✓ settings:/display/input
+  [
+      null
+  ]
+
+✓ settings:/audio/rate
+  [
+      null
+  ]
+
+✓ settings:/audio/filter
+  [
+      null
+  ]
+
+✓ settings:/audio/brightness
+  [
+      null
+  ]
+
+✓ settings:/audio/state
+  [
+      null
+  ]
+
+✓ settings:/audio/config
+  [
+      null
+  ]
+
+✓ settings:/audio/output
+  [
+      null
+  ]
+
+✓ settings:/audio/input
+  [
+      null
+  ]
+
+
+=== TESTING PLAYBACK/TRANSPORT PATHS ===
+
+
+=== TESTING AUDIO FORMAT PATHS ===
+
+
+=== Discovery Complete ===
+Finished: Wed Jan 21 18:08:22 PST 2026
+
