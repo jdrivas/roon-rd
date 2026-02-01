@@ -39,6 +39,29 @@ Download the latest release for your platform from the [Releases](https://github
 - macOS x64 (Intel)
 - Windows x64
 
+### Windows Installation
+
+The easiest way to install on Windows is using the PowerShell install script:
+
+1. Download [`install.ps1`](https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1)
+2. Right-click and select **"Run with PowerShell"**
+
+Or run directly in PowerShell:
+```powershell
+irm https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1 | iex
+```
+
+The script will:
+- Stop any running roon-rd server
+- Download the latest release from GitHub
+- Install to `%LOCALAPPDATA%\roon-rd`
+- Add to your PATH
+
+For system-wide installation (requires Administrator):
+```powershell
+.\install.ps1 -SystemWide
+```
+
 ## Usage
 
 ### Command Line Query Mode
@@ -369,6 +392,8 @@ playback but does not handle audio transport.
 
 ## Version History
 
+- **v1.4.6** - Enhanced opera title formatting (Act I, Atto Primo, etc.)
+- **v1.4.5** - Queue display fixes, audio format improvements
 - **v1.4.4** - Smart track title formatting for classical music and remaster info
 - **v1.4.3** - dCS format display integration
 - **v1.3.2** - Queue overlay improvements, loading text fix

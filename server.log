@@ -189,3 +189,97 @@ Press Ctrl+C to stop the server
 07:38:08 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
 07:38:08 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
 07:38:08 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:05 [0m[34m[INFO] [0mProactively requesting album art: 37181486ea92aa1f1acb5141ac43eef9
+07:41:06 [0m[34m[INFO] [0mProactively requesting album art: 37181486ea92aa1f1acb5141ac43eef9
+07:41:06 [0m[34m[INFO] [0mImage request for key: bc5876c7e3811aaa12b0cf81a83b7b8c
+07:41:06 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:06 [0m[34m[INFO] [0mImage request for key: 37181486ea92aa1f1acb5141ac43eef9
+07:41:06 [0m[34m[INFO] [0mImage request for key: 37181486ea92aa1f1acb5141ac43eef9
+07:41:06 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:06 [0m[34m[INFO] [0mImage request for key: 8c7bfc119db9a1381dd738c1d3bc47fd
+07:41:06 [0m[34m[INFO] [0mImage request for key: 0a3c2e7ac6997b30d30765b787f61729
+07:41:06 [0m[34m[INFO] [0mImage request for key: 5dde3dc6c9b95227178779f8d8c37bab
+07:41:06 [0m[34m[INFO] [0mImage request for key: bc5876c7e3811aaa12b0cf81a83b7b8c
+07:41:06 [0m[34m[INFO] [0mImage request for key: 8c7bfc119db9a1381dd738c1d3bc47fd
+07:41:06 [0m[34m[INFO] [0mImage request for key: 1941dca12442fd465e4e249210ffc5bf
+07:41:06 [0m[34m[INFO] [0mImage request for key: d66836449e35505114abc4b8bcc6c970
+07:41:06 [0m[34m[INFO] [0mImage request for key: 3db9d569eed7c8c27987d9cb22f0185e
+07:41:06 [0m[34m[INFO] [0mImage request for key: d66836449e35505114abc4b8bcc6c970
+07:41:06 [0m[34m[INFO] [0mImage received after 600ms: bc5876c7e3811aaa12b0cf81a83b7b8c (12462 bytes)
+07:41:06 [0m[34m[INFO] [0mServing cached image: 37181486ea92aa1f1acb5141ac43eef9 (48554 bytes)
+07:41:06 [0m[34m[INFO] [0mServing cached image: 37181486ea92aa1f1acb5141ac43eef9 (48554 bytes)
+07:41:06 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:06 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:06 [0m[34m[INFO] [0mImage request for key: 347ec93090afe298dced0a3a0e9d29cc
+07:41:06 [0m[34m[INFO] [0mImage request for key: abc2ebd391e293134453379b0f119348
+07:41:06 [0m[34m[INFO] [0mImage request for key: abc2ebd391e293134453379b0f119348
+07:41:07 [0m[34m[INFO] [0mImage received after 400ms: 8c7bfc119db9a1381dd738c1d3bc47fd (14273 bytes)
+07:41:07 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:07 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:07 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:07 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:07 [0m[34m[INFO] [0mImage received after 500ms: 0a3c2e7ac6997b30d30765b787f61729 (15667 bytes)
+07:41:07 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:07 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:07 [0m[34m[INFO] [0mImage received after 0ms: 5dde3dc6c9b95227178779f8d8c37bab (30590 bytes)
+07:41:07 [0m[34m[INFO] [0mServing cached image: bc5876c7e3811aaa12b0cf81a83b7b8c (12462 bytes)
+07:41:07 [0m[34m[INFO] [0mServing cached image: 8c7bfc119db9a1381dd738c1d3bc47fd (14273 bytes)
+07:41:07 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:07 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:07 [0m[34m[INFO] [0mImage request for key: 0a3c2e7ac6997b30d30765b787f61729
+07:41:07 [0m[34m[INFO] [0mImage request for key: 3db9d569eed7c8c27987d9cb22f0185e
+07:41:07 [0m[34m[INFO] [0mImage request for key: 347ec93090afe298dced0a3a0e9d29cc
+07:41:08 [0m[34m[INFO] [0mImage received after 0ms: 1941dca12442fd465e4e249210ffc5bf (7540 bytes)
+07:41:08 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:08 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:08 [0m[34m[INFO] [0mImage received after 400ms: d66836449e35505114abc4b8bcc6c970 (10925 bytes)
+07:41:08 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:08 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:09 [0m[34m[INFO] [0mImage received after 600ms: 3db9d569eed7c8c27987d9cb22f0185e (13396 bytes)
+07:41:09 [0m[34m[INFO] [0mServing cached image: d66836449e35505114abc4b8bcc6c970 (10925 bytes)
+07:41:09 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:09 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:09 [0m[34m[INFO] [0mImage received after 0ms: 347ec93090afe298dced0a3a0e9d29cc (11120 bytes)
+07:41:09 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:41:09 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:41:09 [0m[34m[INFO] [0mImage received after 0ms: abc2ebd391e293134453379b0f119348 (25184 bytes)
+07:41:09 [0m[34m[INFO] [0mServing cached image: abc2ebd391e293134453379b0f119348 (25184 bytes)
+07:41:09 [0m[34m[INFO] [0mServing cached image: 0a3c2e7ac6997b30d30765b787f61729 (15667 bytes)
+07:41:09 [0m[34m[INFO] [0mServing cached image: 3db9d569eed7c8c27987d9cb22f0185e (13396 bytes)
+07:41:09 [0m[34m[INFO] [0mServing cached image: 347ec93090afe298dced0a3a0e9d29cc (11120 bytes)
+07:41:11 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:11 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:11 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:11 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:16 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:16 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:16 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:16 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:19 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:19 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:19 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:19 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:21 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:21 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:22 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:22 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:26 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:26 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:41:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+17:27:29 [0m[33m[WARN] [0mLost connection to Roon Core: K50, version 2.58 (build 1608) production
+17:27:29 [0m[33m[WARN] [0mTerminating Moo
+18:04:33 [0m[34m[INFO] [0mReconnecting to Roon Core...
+18:04:33 [0m[34m[INFO] [0mConnecting to Roon Core...
+18:04:33 [0m[34m[INFO] [0mRoon API started. Please authorize this extension in Roon Settings > Extensions
+18:04:33 [0m[34m[INFO] [0mDiscovered Roon Core: K50, version 2.58 (build 1608) production
+18:04:33 [0m[34m[INFO] [0mRegistered with Roon Core: K50, version 2.58 (build 1608) production
+18:04:33 [0m[34m[INFO] [0mSubscribing to zone updates...
+18:04:33 [0m[34m[INFO] [0mImage service available
+18:04:33 [0m[34m[INFO] [0mBrowse service available
