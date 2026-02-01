@@ -283,3 +283,5 @@ Press Ctrl+C to stop the server
 18:04:33 [0m[34m[INFO] [0mSubscribing to zone updates...
 18:04:33 [0m[34m[INFO] [0mImage service available
 18:04:33 [0m[34m[INFO] [0mBrowse service available
+21:25:35 [0m[33m[WARN] [0mLost connection to Roon Core: K50, version 2.58 (build 1608) production
+21:25:35 [0m[33m[WARN] [0mTerminating Moo

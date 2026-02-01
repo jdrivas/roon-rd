@@ -43,13 +43,14 @@ Download the latest release for your platform from the [Releases](https://github
 
 The easiest way to install on Windows is using the PowerShell install script:
 
-1. Download [`install.ps1`](https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1)
-2. Right-click and select **"Run with PowerShell"**
-
-Or run directly in PowerShell:
+**Option 1: One-liner (recommended)**
 ```powershell
 irm https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1 | iex
 ```
+
+**Option 2: Download and run**
+1. Download [`install.ps1`](https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1)
+2. Right-click and select **"Run with PowerShell"**
 
 The script will:
 - Stop any running roon-rd server
@@ -61,6 +62,13 @@ For system-wide installation (requires Administrator):
 ```powershell
 .\install.ps1 -SystemWide
 ```
+
+**Troubleshooting: Execution Policy**
+
+If you get a security error when running the downloaded script, you have three options:
+1. Use the one-liner above (bypasses execution policy)
+2. Right-click the file → "Run with PowerShell"
+3. Run once to allow local scripts: `Set-ExecutionPolicy RemoteSigned -Scope CurrentUser`
 
 ## Usage
 

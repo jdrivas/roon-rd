@@ -1,11 +1,20 @@
 # roon-rd Windows Installer Script
 # Downloads and installs the latest roon-rd release from GitHub
 #
-# Usage: Right-click and "Run with PowerShell" or execute in PowerShell:
-#   .\install.ps1
+# USAGE:
+#   Option 1: Right-click this file and select "Run with PowerShell"
+#   Option 2: Run in PowerShell: .\install.ps1
+#   Option 3: One-liner (bypasses execution policy):
+#             irm https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1 | iex
 #
 # To install to Program Files (requires admin):
 #   .\install.ps1 -SystemWide
+#
+# EXECUTION POLICY:
+#   If you get a security error, you can either:
+#   - Use the one-liner above (recommended)
+#   - Run: Set-ExecutionPolicy RemoteSigned -Scope CurrentUser
+#   - Right-click the file and select "Run with PowerShell"
 
 param(
     [switch]$SystemWide = $false
@@ -27,6 +36,9 @@ if ($SystemWide) {
 
 Write-Host ""
 Write-Host "=== roon-rd Windows Installer ===" -ForegroundColor Cyan
+Write-Host ""
+Write-Host "Note: If you downloaded this script and got a security error," -ForegroundColor Gray
+Write-Host "      try: irm https://raw.githubusercontent.com/jdrivas/roon-rd/master/install.ps1 | iex" -ForegroundColor Gray
 Write-Host ""
 
 # Step 1: Stop any running roon-rd processes
