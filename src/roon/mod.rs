@@ -55,6 +55,8 @@ pub enum WsMessage {
     #[serde(rename = "queue_changed")]
     QueueChanged {
         zone_id: String,
+        queue_items_remaining: i64,
+        queue_time_remaining: i64,
     },
 }
 
@@ -119,8 +121,20 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                             // Only return format if bits_per_sample is valid (non-zero)
                             if let Some(bits) = audio_format.bits_per_sample {
                                 if bits > 0 {
+                                    // Check if this is DSD (1-bit audio with high sample rates)
+                                    let is_dsd = bits == 1 && audio_format.sample_frequency.map(|f| f >= 2_000_000).unwrap_or(false);
+                                    
                                     let sample_rate_str = if let Some(freq) = audio_format.sample_frequency {
-                                        if freq >= 1000 {
+                                        if is_dsd {
+                                            // Convert DSD sample rate to DSD64/128/256/512
+                                            match freq {
+                                                2_822_400 => "DSD64".to_string(),
+                                                5_644_800 => "DSD128".to_string(),
+                                                11_289_600 => "DSD256".to_string(),
+                                                22_579_200 => "DSD512".to_string(),
+                                                _ => format!("DSD ({})", freq),
+                                            }
+                                        } else if freq >= 1000 {
                                             format!("{} kHz", freq / 1000)
                                         } else {
                                             format!("{} Hz", freq)
@@ -129,10 +143,19 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                                         String::new()
                                     };
 
-                                    let bit_depth_str = format!("{} bit", bits);
+                                    // For DSD, don't show bit depth (it's always 1-bit)
+                                    let format_str = if is_dsd {
+                                        sample_rate_str.clone()
+                                    } else {
+                                        let bit_depth_str = format!("{} bit", bits);
+                                        if !sample_rate_str.is_empty() {
+                                            format!("{}, {}", sample_rate_str, bit_depth_str)
+                                        } else {
+                                            bit_depth_str
+                                        }
+                                    };
 
-                                    if !sample_rate_str.is_empty() {
-                                        let format_str = format!("{} {}", sample_rate_str, bit_depth_str);
+                                    if !format_str.is_empty() {
                                         log::debug!("dCS format for {}: {}", zone_name, format_str);
                                         Some(format_str)
                                     } else {
@@ -757,9 +780,19 @@ impl RoonClient {
                                         }
                                         log::info!("Queue updated for zone {} - now has {} items", zone_id, queue.len());
 
+                                        // Get queue info from zone data
+                                        let zones_map = zones.read().await;
+                                        let (queue_items_remaining, queue_time_remaining) = zones_map
+                                            .get(zone_id)
+                                            .map(|z| (z.queue_items_remaining, z.queue_time_remaining))
+                                            .unwrap_or((0, 0));
+                                        drop(zones_map);
+
                                         // Notify frontend via WebSocket that queue has changed
                                         let _ = ws_tx.send(WsMessage::QueueChanged {
                                             zone_id: zone_id.clone(),
+                                            queue_items_remaining,
+                                            queue_time_remaining,
                                         });
                                     } else {
                                         log::warn!("Received queue changes for zone {} but no queue cached", zone_id);
@@ -833,8 +866,20 @@ impl RoonClient {
                                 // Only return format if bits_per_sample is valid (non-zero)
                                 if let Some(bits) = audio_format.bits_per_sample {
                                     if bits > 0 {
+                                        // Check if this is DSD (1-bit audio with high sample rates)
+                                        let is_dsd = bits == 1 && audio_format.sample_frequency.map(|f| f >= 2_000_000).unwrap_or(false);
+                                        
                                         let sample_rate_str = if let Some(freq) = audio_format.sample_frequency {
-                                            if freq >= 1000 {
+                                            if is_dsd {
+                                                // Convert DSD sample rate to DSD64/128/256/512
+                                                match freq {
+                                                    2_822_400 => "DSD64".to_string(),
+                                                    5_644_800 => "DSD128".to_string(),
+                                                    11_289_600 => "DSD256".to_string(),
+                                                    22_579_200 => "DSD512".to_string(),
+                                                    _ => format!("DSD ({})", freq),
+                                                }
+                                            } else if freq >= 1000 {
                                                 format!("{} kHz", freq / 1000)
                                             } else {
                                                 format!("{} Hz", freq)
@@ -843,12 +888,20 @@ impl RoonClient {
                                             String::new()
                                         };
 
-                                        let bit_depth_str = format!("{} bit", bits);
-
-                                        if !sample_rate_str.is_empty() {
-                                            Some(format!("{} {}", sample_rate_str, bit_depth_str))
+                                        // For DSD, don't show bit depth (it's always 1-bit)
+                                        if is_dsd {
+                                            if !sample_rate_str.is_empty() {
+                                                Some(sample_rate_str)
+                                            } else {
+                                                None
+                                            }
                                         } else {
-                                            None
+                                            let bit_depth_str = format!("{} bit", bits);
+                                            if !sample_rate_str.is_empty() {
+                                                Some(format!("{}, {}", sample_rate_str, bit_depth_str))
+                                            } else {
+                                                None
+                                            }
                                         }
                                     } else {
                                         log::debug!("dCS format has bits_per_sample=0, not displaying");

@@ -1,4 +1,4 @@
-   Compiling roon-rd v1.4.3 (/Users/david/Dropbox/Development/rust/roon-rd)
+   Compiling roon-rd v1.4.4 (/Users/david/Dropbox/Development/rust/roon-rd)
 warning: fields `usn` and `server` are never read
  --> src/upnp/mod.rs:8:9
   |
@@ -51,13 +51,13 @@ warning: method `clear` is never used
     |            ^^^^^
 
 warning: `roon-rd` (bin "roon-rd") generated 5 warnings
-    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.36s
-     Running `target/debug/roon-rd server --port 3000`
-20:02:52 [0m[34m[INFO] [0mInitializing Roon Remote Display...
-20:02:52 [0m[34m[INFO] [0mConnecting to Roon Core...
-20:02:52 [0m[34m[INFO] [0mRoon API started. Please authorize this extension in Roon Settings > Extensions
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 4.17s
+     Running `target/debug/roon-rd server`
+07:00:15 [0m[34m[INFO] [0mInitializing Roon Remote Display...
+07:00:15 [0m[34m[INFO] [0mConnecting to Roon Core...
+07:00:15 [0m[34m[INFO] [0mRoon API started. Please authorize this extension in Roon Settings > Extensions
 
-=== Roon Remote Display Server v1.4.3 ===
+=== Roon Remote Display Server v1.4.4 ===
 Starting server on http://0.0.0.0:3000
 
 Open http://localhost:3000 in your browser
@@ -79,239 +79,56 @@ API endpoints:
 
 Press Ctrl+C to stop the server
 
-20:02:52 [0m[34m[INFO] [0mDiscovered Roon Core: K50, version 2.58 (build 1608) production
-20:02:52 [0m[34m[INFO] [0mRegistered with Roon Core: K50, version 2.58 (build 1608) production
-20:02:52 [0m[34m[INFO] [0mSubscribing to zone updates...
-20:02:52 [0m[34m[INFO] [0mImage service available
-20:02:52 [0m[34m[INFO] [0mBrowse service available
-20:02:52 [0m[34m[INFO] [0mProactively requesting album art: b19836dcae35efc6451f113eaa2bdf95
-20:03:13 [0m[34m[INFO] [0mImage request for key: b19836dcae35efc6451f113eaa2bdf95
-20:03:13 [0m[34m[INFO] [0mServing cached image: b19836dcae35efc6451f113eaa2bdf95 (22668 bytes)
-20:03:13 [0m[34m[INFO] [0mImage request for key: 90fb6e2827db31ee7706d29a44d00887
-20:03:13 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:03:13 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:03:13 [0m[34m[INFO] [0mImage request for key: c1f0492163b637dd36c5f82375b7c1b9
-20:03:14 [0m[34m[INFO] [0mImage received after 0ms: 90fb6e2827db31ee7706d29a44d00887 (29943 bytes)
-20:03:14 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:03:14 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:03:14 [0m[34m[INFO] [0mImage received after 0ms: c1f0492163b637dd36c5f82375b7c1b9 (15383 bytes)
-20:03:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:33 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:33 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:33 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:40 [0m[34m[INFO] [0mProactively requesting album art: f7ac7ff8b9addf16904750dcbcb0ac22
-20:03:40 [0m[34m[INFO] [0mImage request for key: f7ac7ff8b9addf16904750dcbcb0ac22
-20:03:40 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:03:40 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:03:40 [0m[34m[INFO] [0mImage request for key: 3df1f92a73aee72c0ac90dbfae7afdb3
-20:03:40 [0m[34m[INFO] [0mImage received after 0ms: f7ac7ff8b9addf16904750dcbcb0ac22 (24566 bytes)
-20:03:40 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:03:40 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:03:40 [0m[34m[INFO] [0mImage received after 0ms: 3df1f92a73aee72c0ac90dbfae7afdb3 (13584 bytes)
-20:03:42 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:42 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:42 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:42 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:45 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:45 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:45 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:45 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:49 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:49 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:50 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:50 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:53 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:53 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:54 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:03:54 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:04:43 [0m[34m[INFO] [0mProactively requesting album art: 4d6391512566037577830b978d26c66e
-20:04:44 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:04:44 [0m[34m[INFO] [0mImage request for key: 4d6391512566037577830b978d26c66e
-20:04:44 [0m[34m[INFO] [0mServing cached image: 4d6391512566037577830b978d26c66e (39179 bytes)
-20:04:44 [0m[34m[INFO] [0mImage request for key: 78f42d9288c9488b94830e902afc978b
-20:04:44 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:04:44 [0m[34m[INFO] [0mImage request for key: 4d6391512566037577830b978d26c66e
-20:04:44 [0m[34m[INFO] [0mImage request for key: 78f42d9288c9488b94830e902afc978b
-20:04:44 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:04:44 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:04:44 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:04:45 [0m[34m[INFO] [0mImage received after 200ms: 78f42d9288c9488b94830e902afc978b (12028 bytes)
-20:04:45 [0m[34m[INFO] [0mServing cached image: 4d6391512566037577830b978d26c66e (39179 bytes)
-20:04:45 [0m[34m[INFO] [0mServing cached image: 78f42d9288c9488b94830e902afc978b (12028 bytes)
-20:04:45 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:00 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:00 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:00 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:00 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:26 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:26 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:26 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:26 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:41 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:41 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:41 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:41 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:42 [0m[34m[INFO] [0mProactively requesting album art: b6df075ab26377061352425c760430e1
-20:05:43 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:43 [0m[34m[INFO] [0mImage request for key: b6df075ab26377061352425c760430e1
-20:05:43 [0m[34m[INFO] [0mServing cached image: b6df075ab26377061352425c760430e1 (30502 bytes)
-20:05:43 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:43 [0m[34m[INFO] [0mImage request for key: 006c0016421d4628dcf3537f0e6234d5
-20:05:43 [0m[34m[INFO] [0mImage request for key: b6df075ab26377061352425c760430e1
-20:05:43 [0m[34m[INFO] [0mImage request for key: 006c0016421d4628dcf3537f0e6234d5
-20:05:43 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:05:43 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:05:43 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:44 [0m[34m[INFO] [0mImage received after 400ms: 006c0016421d4628dcf3537f0e6234d5 (15213 bytes)
-20:05:44 [0m[34m[INFO] [0mServing cached image: b6df075ab26377061352425c760430e1 (30502 bytes)
-20:05:44 [0m[34m[INFO] [0mServing cached image: 006c0016421d4628dcf3537f0e6234d5 (15213 bytes)
-20:05:44 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:50 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:50 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:50 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:51 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:53 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:53 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:54 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:54 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:58 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:58 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:59 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:05:59 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:00 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:00 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:01 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:01 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:21 [0m[34m[INFO] [0mProactively requesting album art: b751e6b63ed107189099e6a2ac826c58
-20:06:21 [0m[34m[INFO] [0mImage request for key: b751e6b63ed107189099e6a2ac826c58
-20:06:21 [0m[34m[INFO] [0mImage request for key: b3c58e27a174cd50e315ef476e5d2da2
-20:06:21 [0m[34m[INFO] [0mServing cached image: b751e6b63ed107189099e6a2ac826c58 (37805 bytes)
-20:06:21 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:06:21 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:06:21 [0m[34m[INFO] [0mImage request for key: b751e6b63ed107189099e6a2ac826c58
-20:06:21 [0m[34m[INFO] [0mImage request for key: b3c58e27a174cd50e315ef476e5d2da2
-20:06:22 [0m[34m[INFO] [0mImage received after 400ms: b3c58e27a174cd50e315ef476e5d2da2 (13383 bytes)
-20:06:22 [0m[34m[INFO] [0mServing cached image: b751e6b63ed107189099e6a2ac826c58 (37805 bytes)
-20:06:22 [0m[34m[INFO] [0mServing cached image: b3c58e27a174cd50e315ef476e5d2da2 (13383 bytes)
-20:06:23 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:23 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:23 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:23 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:30 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:30 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:30 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:31 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:31 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:31 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:35 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:57 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:57 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:57 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:06:57 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:04 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:04 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:04 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:04 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:07 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:07 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:07 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:08 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:10 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:10 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:11 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:11 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:13 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:13 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:13 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:13 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:15 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:15 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:15 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:15 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:42 [0m[34m[INFO] [0mProactively requesting album art: b74611bfcbf155c1101d929cd0c6543a
-20:07:43 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:43 [0m[34m[INFO] [0mImage request for key: b74611bfcbf155c1101d929cd0c6543a
-20:07:43 [0m[34m[INFO] [0mServing cached image: b74611bfcbf155c1101d929cd0c6543a (42745 bytes)
-20:07:43 [0m[34m[INFO] [0mImage request for key: 598392d3c550003d8e48864296cbd312
-20:07:43 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:07:43 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:07:43 [0m[34m[INFO] [0mImage request for key: 803fd211101c2fe36e52049b35562c9a
-20:07:43 [0m[34m[INFO] [0mImage request for key: b74611bfcbf155c1101d929cd0c6543a
-20:07:43 [0m[34m[INFO] [0mImage request for key: 803fd211101c2fe36e52049b35562c9a
-20:07:43 [0m[34m[INFO] [0mImage request for key: 598392d3c550003d8e48864296cbd312
-20:07:43 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:43 [0m[34m[INFO] [0mImage received after 300ms: 598392d3c550003d8e48864296cbd312 (27936 bytes)
-20:07:43 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:07:43 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:07:44 [0m[34m[INFO] [0mImage received after 300ms: 803fd211101c2fe36e52049b35562c9a (14269 bytes)
-20:07:44 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:07:44 [0m[34m[INFO] [0mServing cached image: b74611bfcbf155c1101d929cd0c6543a (42745 bytes)
-20:07:44 [0m[34m[INFO] [0mServing cached image: 803fd211101c2fe36e52049b35562c9a (14269 bytes)
-20:07:44 [0m[34m[INFO] [0mServing cached image: 598392d3c550003d8e48864296cbd312 (27936 bytes)
-20:07:44 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:08:35 [0m[34m[INFO] [0mProactively requesting album art: 49383b23b0478dd6a319e7d5561e8a97
-20:08:35 [0m[34m[INFO] [0mImage request for key: 6aeb794841d15f2fb797641b1df2f814
-20:08:35 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:08:35 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:08:35 [0m[34m[INFO] [0mImage request for key: 49383b23b0478dd6a319e7d5561e8a97
-20:08:35 [0m[34m[INFO] [0mImage request for key: 52c7a5769f3fa7a485c03bccfbd2dc5b
-20:08:35 [0m[34m[INFO] [0mImage request for key: 49383b23b0478dd6a319e7d5561e8a97
-20:08:35 [0m[34m[INFO] [0mImage request for key: 6aeb794841d15f2fb797641b1df2f814
-20:08:36 [0m[34m[INFO] [0mImage received after 400ms: 6aeb794841d15f2fb797641b1df2f814 (17326 bytes)
-20:08:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:08:36 [0m[34m[INFO] [0mServing cached image: 49383b23b0478dd6a319e7d5561e8a97 (63030 bytes)
-20:08:36 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:08:36 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:08:36 [0m[34m[INFO] [0mImage received after 0ms: 52c7a5769f3fa7a485c03bccfbd2dc5b (14309 bytes)
-20:08:36 [0m[34m[INFO] [0mServing cached image: 49383b23b0478dd6a319e7d5561e8a97 (63030 bytes)
-20:08:36 [0m[34m[INFO] [0mServing cached image: 6aeb794841d15f2fb797641b1df2f814 (17326 bytes)
-20:08:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:08:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:08:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:08:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:08:36 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:23 [0m[34m[INFO] [0mProactively requesting album art: d8705927c87e86ae6a4e9ecd8f828cd3
-20:09:23 [0m[34m[INFO] [0mImage request for key: 19cae27c9f143ecc97e5f19cd81e86c0
-20:09:23 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
-20:09:23 [0m[34m[INFO] [0mImage request sent, waiting for response...
-20:09:23 [0m[34m[INFO] [0mImage request for key: d8705927c87e86ae6a4e9ecd8f828cd3
-20:09:23 [0m[34m[INFO] [0mImage request for key: d8705927c87e86ae6a4e9ecd8f828cd3
-20:09:23 [0m[34m[INFO] [0mImage request for key: 19cae27c9f143ecc97e5f19cd81e86c0
-20:09:23 [0m[34m[INFO] [0mImage received after 300ms: 19cae27c9f143ecc97e5f19cd81e86c0 (16572 bytes)
-20:09:23 [0m[34m[INFO] [0mServing cached image: d8705927c87e86ae6a4e9ecd8f828cd3 (35719 bytes)
-20:09:23 [0m[34m[INFO] [0mServing cached image: d8705927c87e86ae6a4e9ecd8f828cd3 (35719 bytes)
-20:09:23 [0m[34m[INFO] [0mServing cached image: 19cae27c9f143ecc97e5f19cd81e86c0 (16572 bytes)
-20:09:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:24 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:29 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:29 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:29 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:29 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:32 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:34 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:37 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:37 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:37 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
-20:09:37 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:00:15 [0m[34m[INFO] [0mDiscovered Roon Core: K50, version 2.58 (build 1608) production
+07:00:15 [0m[34m[INFO] [0mRegistered with Roon Core: K50, version 2.58 (build 1608) production
+07:00:15 [0m[34m[INFO] [0mSubscribing to zone updates...
+07:00:15 [0m[34m[INFO] [0mImage service available
+07:00:15 [0m[34m[INFO] [0mBrowse service available
+07:01:57 [0m[34m[INFO] [0mProactively requesting album art: 91a77663fdbc333a343bb619f72da17c
+07:01:59 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:01:59 [0m[34m[INFO] [0mImage request for key: 91a77663fdbc333a343bb619f72da17c
+07:01:59 [0m[34m[INFO] [0mServing cached image: 91a77663fdbc333a343bb619f72da17c (37402 bytes)
+07:01:59 [0m[34m[INFO] [0mImage request for key: c24172c5c37fe912649979943bdbd06d
+07:01:59 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:01:59 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:01:59 [0m[34m[INFO] [0mImage received after 0ms: c24172c5c37fe912649979943bdbd06d (16300 bytes)
+07:01:59 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:01:59 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:01:59 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:12 [0m[34m[INFO] [0mProactively requesting album art: 4ac881a4c98caf9c8556e029cee32aeb
+07:02:12 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:12 [0m[34m[INFO] [0mImage request for key: 4ac881a4c98caf9c8556e029cee32aeb
+07:02:12 [0m[34m[INFO] [0mServing cached image: 4ac881a4c98caf9c8556e029cee32aeb (19120 bytes)
+07:02:12 [0m[34m[INFO] [0mImage request for key: 53ef16d0170b69e7f4a9b96245b2f229
+07:02:12 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:12 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:02:12 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:02:12 [0m[34m[INFO] [0mImage received after 0ms: 53ef16d0170b69e7f4a9b96245b2f229 (13788 bytes)
+07:02:12 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:12 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:26 [0m[34m[INFO] [0mProactively requesting album art: 1f663da7a97bf99bbcb2ee822111c9f1
+07:02:26 [0m[34m[INFO] [0mImage request for key: 1f663da7a97bf99bbcb2ee822111c9f1
+07:02:26 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:02:26 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:02:26 [0m[34m[INFO] [0mImage request for key: 1f663da7a97bf99bbcb2ee822111c9f1
+07:02:26 [0m[34m[INFO] [0mImage received after 0ms: 1f663da7a97bf99bbcb2ee822111c9f1 (19039 bytes)
+07:02:26 [0m[34m[INFO] [0mServing cached image: 1f663da7a97bf99bbcb2ee822111c9f1 (19039 bytes)
+07:02:27 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:27 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:27 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:27 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:54 [0m[34m[INFO] [0mProactively requesting album art: 1ae7a58034f2001f9d92aafe9db1776c
+07:02:55 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:55 [0m[34m[INFO] [0mImage request for key: 78f42d9288c9488b94830e902afc978b
+07:02:55 [0m[34m[INFO] [0mImage not cached, requesting from Roon...
+07:02:55 [0m[34m[INFO] [0mImage request sent, waiting for response...
+07:02:55 [0m[34m[INFO] [0mImage request for key: 1ae7a58034f2001f9d92aafe9db1776c
+07:02:55 [0m[34m[INFO] [0mImage request for key: 1ae7a58034f2001f9d92aafe9db1776c
+07:02:55 [0m[34m[INFO] [0mImage request for key: 78f42d9288c9488b94830e902afc978b
+07:02:55 [0m[34m[INFO] [0mImage received after 0ms: 78f42d9288c9488b94830e902afc978b (12028 bytes)
+07:02:55 [0m[34m[INFO] [0mServing cached image: 1ae7a58034f2001f9d92aafe9db1776c (35115 bytes)
+07:02:55 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:55 [0m[34m[INFO] [0mServing cached image: 1ae7a58034f2001f9d92aafe9db1776c (35115 bytes)
+07:02:55 [0m[34m[INFO] [0mServing cached image: 78f42d9288c9488b94830e902afc978b (12028 bytes)
+07:02:55 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local
+07:02:55 [0m[34m[INFO] [0mFetching playback info from dCS device: dcs-vivaldi.local

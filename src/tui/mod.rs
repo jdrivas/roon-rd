@@ -1474,8 +1474,8 @@ where
                         crate::roon::WsMessage::ConnectionChanged { connected } => {
                             format!("[{}] connection_changed: {:#?}", Local::now().format("%H:%M:%S"), connected)
                         }
-                        crate::roon::WsMessage::QueueChanged { zone_id } => {
-                            format!("[{}] queue_changed: {:#?}", Local::now().format("%H:%M:%S"), zone_id)
+                        crate::roon::WsMessage::QueueChanged { zone_id, queue_items_remaining, queue_time_remaining } => {
+                            format!("[{}] queue_changed: zone={}, items={}, time={}", Local::now().format("%H:%M:%S"), zone_id, queue_items_remaining, queue_time_remaining)
                         }
                         crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
                     }
@@ -1492,8 +1492,8 @@ where
                         crate::roon::WsMessage::ConnectionChanged { connected } => {
                             format!("[{}] connection_changed: {}", Local::now().format("%H:%M:%S"), connected)
                         }
-                        crate::roon::WsMessage::QueueChanged { zone_id } => {
-                            format!("[{}] queue_changed: zone={}", Local::now().format("%H:%M:%S"), zone_id)
+                        crate::roon::WsMessage::QueueChanged { zone_id, queue_items_remaining, queue_time_remaining } => {
+                            format!("[{}] queue_changed: zone={}, items={}, time={}", Local::now().format("%H:%M:%S"), zone_id, queue_items_remaining, queue_time_remaining)
                         }
                         crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
                     }

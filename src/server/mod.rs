@@ -292,7 +292,6 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             font-size: 0.8rem;
             color: #888;
             margin-top: 5px;
-            font-family: 'Courier New', monospace;
         }
         .progress-container {
             margin-top: 15px;
@@ -322,16 +321,15 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             display: flex;
             justify-content: space-between;
             align-items: center;
-            font-size: 0.75rem;
+            font-size: 0.85rem;
             color: #666;
-            margin-top: -2px;
+            margin-top: 2px;
         }
         .queue-count {
             opacity: 0.8;
         }
         .queue-time {
             opacity: 0.8;
-            font-size: 0.75rem;
         }
         .queue-time-value {
             font-family: 'Courier New', Courier, monospace;
@@ -954,8 +952,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                             <span class="total-time" onclick="toggleTimeDisplay('${zone.zone_id}')" style="cursor: pointer;" title="Click to toggle between total time and time remaining">${formatTime(zone.length_seconds)}</span>
                                         </div>
                                         <div class="queue-info">
-                                            ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-count">${zone.queue_items_remaining} track${zone.queue_items_remaining !== 1 ? 's' : ''} in the queue</span>` : ''}
-                                            ${zone.queue_items_remaining > 0 && zone.queue_time_remaining > 0 ? `<span class="queue-time"><span class="queue-time-value">${formatTime(zone.queue_time_remaining)}</span> remaining</span>` : ''}
+                                            ${zone.queue_items_remaining > 1 ? `<span class="queue-count">${zone.queue_items_remaining - 1} track${zone.queue_items_remaining !== 2 ? 's' : ''} in the queue</span>` : ''}
+                                            ${zone.queue_items_remaining > 1 ? `<span class="queue-time"><span class="queue-time-value">${formatTime(zone.queue_time_remaining || 0)}</span> remaining</span>` : ''}
                                         </div>
                                     </div>
                                 </div>
@@ -1084,6 +1082,44 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         progressTimes[1].textContent = formatTime(remaining) + ' remaining';
                     } else {
                         progressTimes[1].textContent = formatTime(zone.length_seconds);
+                    }
+                }
+
+                // Update queue info (track count and time remaining)
+                // Note: queue_items_remaining INCLUDES current track, so subtract 1 for display
+                // queue_time_remaining is total time for all remaining tracks including current
+                const queueInfo = element.querySelector('.queue-info');
+                if (queueInfo) {
+                    const upcomingTracks = zone.queue_items_remaining - 1;
+                    if (upcomingTracks > 0) {
+                        const queueCount = queueInfo.querySelector('.queue-count');
+                        const queueTime = queueInfo.querySelector('.queue-time');
+                        
+                        const countText = `${upcomingTracks} track${upcomingTracks !== 1 ? 's' : ''} in the queue`;
+                        const timeText = `<span class="queue-time-value">${formatTime(zone.queue_time_remaining || 0)}</span> remaining`;
+                        
+                        if (queueCount) {
+                            queueCount.textContent = countText;
+                        } else {
+                            // Create queue count span if it doesn't exist
+                            const span = document.createElement('span');
+                            span.className = 'queue-count';
+                            span.textContent = countText;
+                            queueInfo.insertBefore(span, queueInfo.firstChild);
+                        }
+                        
+                        if (queueTime) {
+                            queueTime.innerHTML = timeText;
+                        } else {
+                            // Create queue time span if it doesn't exist
+                            const span = document.createElement('span');
+                            span.className = 'queue-time';
+                            span.innerHTML = timeText;
+                            queueInfo.appendChild(span);
+                        }
+                    } else {
+                        // No queue items, clear the info
+                        queueInfo.innerHTML = '';
                     }
                 }
 
@@ -1445,13 +1481,58 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 }
             }
 
-            // Update queue time remaining (add remaining time of current track)
-            if (queueTimeElement && queueTimeRemaining != null && zoneData.queue_items_remaining > 0) {
-                const currentTrackRemaining = length - position;
-                const totalQueueTime = queueTimeRemaining + currentTrackRemaining;
-                if (totalQueueTime > 0) {
-                    queueTimeElement.innerHTML = `<span class="queue-time-value">${formatTime(totalQueueTime)}</span> remaining`;
+            // Update queue time remaining (queue_time_remaining already includes current track time)
+            if (queueTimeElement && queueTimeRemaining != null && zoneData.queue_items_remaining > 1) {
+                if (queueTimeRemaining > 0) {
+                    queueTimeElement.innerHTML = `<span class="queue-time-value">${formatTime(queueTimeRemaining)}</span> remaining`;
                 }
+            }
+        }
+
+        // Update queue info display when queue changes (e.g., user clears queue or skips track)
+        // Note: queue_items_remaining INCLUDES current track, so subtract 1 for display
+        function updateQueueInfo(zoneId, queueItemsRemaining, queueTimeRemaining) {
+            const zoneElement = document.querySelector(`[data-zone-id="${zoneId}"]`);
+            if (!zoneElement) return;
+
+            const queueInfo = zoneElement.querySelector('.queue-info');
+            if (!queueInfo) return;
+
+            // Update the cached zone data
+            const zoneData = nowPlayingZones.find(z => z.zone_id === zoneId);
+            if (zoneData) {
+                zoneData.queue_items_remaining = queueItemsRemaining;
+                zoneData.queue_time_remaining = queueTimeRemaining;
+            }
+
+            const upcomingTracks = queueItemsRemaining - 1;
+            if (upcomingTracks > 0) {
+                const countText = `${upcomingTracks} track${upcomingTracks !== 1 ? 's' : ''} in the queue`;
+                const timeText = `<span class="queue-time-value">${formatTime(queueTimeRemaining || 0)}</span> remaining`;
+
+                let queueCount = queueInfo.querySelector('.queue-count');
+                let queueTime = queueInfo.querySelector('.queue-time');
+
+                if (queueCount) {
+                    queueCount.textContent = countText;
+                } else {
+                    queueCount = document.createElement('span');
+                    queueCount.className = 'queue-count';
+                    queueCount.textContent = countText;
+                    queueInfo.insertBefore(queueCount, queueInfo.firstChild);
+                }
+
+                if (queueTime) {
+                    queueTime.innerHTML = timeText;
+                } else {
+                    queueTime = document.createElement('span');
+                    queueTime.className = 'queue-time';
+                    queueTime.innerHTML = timeText;
+                    queueInfo.appendChild(queueTime);
+                }
+            } else {
+                // No queue items, clear the info
+                queueInfo.innerHTML = '';
             }
         }
 
@@ -1797,7 +1878,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         // Only update seek position for this specific zone
                         updateSeekPosition(msg.zone_id, msg.seek_position, msg.queue_time_remaining);
                     } else if (msg.type === 'queue_changed') {
-                        // Queue has changed - refresh if queue popup is open for this zone
+                        // Queue has changed - update queue info display and refresh popup if open
+                        updateQueueInfo(msg.zone_id, msg.queue_items_remaining, msg.queue_time_remaining);
                         refreshQueueIfOpen(msg.zone_id);
                     }
                 } catch (e) {

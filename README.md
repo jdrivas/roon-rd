@@ -6,11 +6,13 @@ A Rust-based Roon extension that provides command-line querying, interactive con
 
 - **CLI Query Mode**: Query Roon information directly from the command line
 - **Interactive CLI Mode**: Interactive shell for real-time Roon control
+- **TUI Mode**: Terminal UI with a fixed prompt for interactive control
 - **Server Mode**: Web server with REST API and browser-based SPA
 - **Roon Extension**: Integrates with Roon Core as an authorized extension
 - **Real-time Updates**: WebSocket support for live playback updates
 - **Multi-zone Support**: Control and monitor multiple Roon zones
 - **Queue Management**: View and interact with playback queues
+- **Smart Track Title Formatting**: Multi-line display for classical music and remaster info
 
 ## Prerequisites
 
@@ -93,6 +95,20 @@ Zone: Bedroom (stopped)
 Living Room: Artist - Track Name
 ```
 
+### TUI Mode
+
+Launch a terminal UI with a fixed prompt:
+
+```bash
+./roon-rd tui
+```
+
+**TUI Mode Features:**
+- Terminal-based user interface with ratatui
+- Fixed prompt display
+- Real-time zone monitoring
+- Same commands as interactive mode
+
 ### Server Mode
 
 Start the web server with integrated SPA:
@@ -125,7 +141,7 @@ The server includes a modern web-based interface accessible at `http://localhost
 - **Zone Selector**: Filter by specific zone or view all zones
 - **Playback Controls**: Play, pause, previous, next track controls
 - **Progress Bar**: Visual playback progress with seek support
-- **Queue View**: Click album art to view and navigate playback queue
+- **Queue View**: Access via queue button in transport controls to view and navigate playback queue
 - **Album Art**: High-quality album artwork display
 - **Fullscreen Mode**: Optimized for dedicated displays
 - **Responsive Design**: Adapts to different screen sizes
@@ -141,23 +157,21 @@ The server includes a modern web-based interface accessible at `http://localhost
 
 When running in server mode, the following endpoints are available:
 
-### Public Endpoints
-
-- `GET /` - Serve the Single Page Application
-- `GET /status` - Get Roon Core connection status
-- `GET /zones` - Get list of all available zones with device info
-- `GET /now-playing` - Get currently playing tracks across all zones
-- `GET /queue/:zone_id` - Get playback queue for a specific zone
-- `GET /image/:image_key` - Get album art image by Roon image key
-- `GET /ws` - WebSocket endpoint for real-time zone updates
-
-### Control Endpoints
-
-- `POST /control/:zone_id` - Control playback (play, pause, stop, previous, next)
-- `POST /seek/:zone_id` - Seek to position in current track
-- `POST /mute/:zone_id` - Toggle mute for zone
-- `POST /play-from-queue/:zone_id` - Play specific item from queue
-- `POST /reconnect` - Reconnect to Roon Core
+| Method | Endpoint | Description |
+|--------|----------|-------------|
+| `GET` | `/` | Serve the web UI (Single Page Application) |
+| `WS` | `/ws` | WebSocket connection for real-time zone updates |
+| `GET` | `/status` | Get Roon Core connection status (JSON) |
+| `GET` | `/version` | Get server version (JSON) |
+| `POST` | `/reconnect` | Reconnect to Roon Core |
+| `GET` | `/zones` | Get list of all available Roon zones (JSON) |
+| `GET` | `/now-playing` | Get currently playing tracks across all zones (JSON) |
+| `GET` | `/queue/:zone_id` | Get playback queue for a specific zone (JSON) |
+| `GET` | `/image/:image_key` | Get album art image by Roon image key |
+| `POST` | `/control/:zone_id` | Control playback (play/pause/stop/previous/next) |
+| `POST` | `/seek/:zone_id` | Seek to position in current track |
+| `POST` | `/mute/:zone_id` | Toggle mute for a zone |
+| `POST` | `/play-from-queue/:zone_id` | Play a specific item from the queue |
 
 ### API Examples
 
@@ -291,7 +305,7 @@ make mac              # Both macOS variants
 make mac-arm64        # Apple Silicon only
 make mac-x64          # Intel Mac only
 make windows          # Windows x64
-make linux            # Linux x64 (requires cross)
+# make linux          # Linux x64 (requires cross, not currently configured)
 
 # Create GitHub release with binaries
 make github-release
@@ -355,6 +369,8 @@ playback but does not handle audio transport.
 
 ## Version History
 
+- **v1.4.4** - Smart track title formatting for classical music and remaster info
+- **v1.4.3** - dCS format display integration
 - **v1.3.2** - Queue overlay improvements, loading text fix
 - **v1.3.1** - UI improvements, version display
 - **v1.3.0** - Version bump
