@@ -853,23 +853,36 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 bracketedSuffix = bracketMatch[2];
             }
             
-            // Case 1: Classical music pattern - "<Piece Name>, <Catalogue Number>: <Movement Number>. <Movement Name>"
-            // Break at colon before movement number (Roman or Arabic numerals)
+            // Case 1a: Opera pattern - break after "Act X:" or "Atto Primo/Secondo/etc:"
+            // e.g., "Le nozze di Figaro, K.492 / Act 1:N1. 5. Duettino..."
+            // e.g., "Le nozze di Figaro, K. 492: Atto Primo: Se a caso..."
+            // e.g., "Le nozze di Figaro, K. 492, Act I: Recit..."
             let formattedMain = mainPart;
-            const classicalMatch = mainPart.match(/^(.+?:\s*)((?:M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})|\d+)\..*)$/i);
+            const operaMatch = mainPart.match(/^(.+?[,:\/]\s*(?:Act\s+(?:\d+|[IV]+)|Atto\s+(?:Primo|Secondo|Terzo|Quarto|Quinto)):?)\s*(.+)$/i);
             
-            if (classicalMatch) {
-                // Break before the movement number, keeping colon with piece/catalogue
-                const pieceAndCatalogue = classicalMatch[1].trim();
-                const movement = classicalMatch[2].trim();
-                formattedMain = pieceAndCatalogue + '<br>' + movement;
-            } else {
-                // Fallback: break at comma if no classical pattern found
-                const commaIndex = mainPart.indexOf(',');
-                if (commaIndex > 20 && commaIndex < mainPart.length - 10) {
-                    const beforeComma = mainPart.substring(0, commaIndex + 1).trim();
-                    const afterComma = mainPart.substring(commaIndex + 1).trim();
-                    formattedMain = beforeComma + '<br>' + afterComma;
+            if (operaMatch) {
+                const operaAndAct = operaMatch[1].trim();
+                const songTitle = operaMatch[2].trim();
+                formattedMain = operaAndAct + '<br>' + songTitle;
+            }
+            // Case 1b: Classical music pattern - "<Piece Name>, <Catalogue Number>: <Movement Number>. <Movement Name>"
+            // Break at colon before movement number (Roman or Arabic numerals)
+            else {
+                const classicalMatch = mainPart.match(/^(.+?:\s*)((?:M{0,3}(?:CM|CD|D?C{0,3})(?:XC|XL|L?X{0,3})(?:IX|IV|V?I{0,3})|\d+)\..*)$/i);
+                
+                if (classicalMatch) {
+                    // Break before the movement number, keeping colon with piece/catalogue
+                    const pieceAndCatalogue = classicalMatch[1].trim();
+                    const movement = classicalMatch[2].trim();
+                    formattedMain = pieceAndCatalogue + '<br>' + movement;
+                } else {
+                    // Fallback: break at comma if no classical pattern found
+                    const commaIndex = mainPart.indexOf(',');
+                    if (commaIndex > 20 && commaIndex < mainPart.length - 10) {
+                        const beforeComma = mainPart.substring(0, commaIndex + 1).trim();
+                        const afterComma = mainPart.substring(commaIndex + 1).trim();
+                        formattedMain = beforeComma + '<br>' + afterComma;
+                    }
                 }
             }
             
