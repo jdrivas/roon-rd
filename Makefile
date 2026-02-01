@@ -116,6 +116,7 @@ github-release: release
 	if [ -f "$(BIN_MAC_X64)" ]; then BINARIES="$$BINARIES $(BIN_MAC_X64)"; fi; \
 	if [ -f "$(BIN_LINUX_X64)" ]; then BINARIES="$$BINARIES $(BIN_LINUX_X64)"; fi; \
 	if [ -f "$(BIN_WINDOWS_X64)" ]; then BINARIES="$$BINARIES $(BIN_WINDOWS_X64)"; fi; \
+	if [ -f "install.ps1" ]; then BINARIES="$$BINARIES install.ps1"; fi; \
 	echo "Binaries to upload:$$BINARIES"; \
 	echo "Creating release v$(VERSION)..."; \
 	gh release create v$(VERSION) \
