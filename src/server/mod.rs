@@ -771,20 +771,29 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             const container = document.querySelector(`.artist-images[data-zone-id="${zoneId}"]`);
             if (!container) return;
 
-            const images = container.querySelectorAll('.artist-image');
-            if (images.length <= 1) return; // No need for carousel with 0 or 1 image
-
-            let currentIndex = 0;
+            // Only consider visible images (not hidden due to load errors)
+            const getVisibleImages = () => Array.from(container.querySelectorAll('.artist-image')).filter(img => img.style.display !== 'none');
+            
+            let visibleImages = getVisibleImages();
+            if (visibleImages.length <= 1) return; // No need for carousel with 0 or 1 image
 
             const rotateImage = () => {
-                // Remove active class from current image
-                images[currentIndex].classList.remove('active');
-
-                // Move to next image
-                currentIndex = (currentIndex + 1) % images.length;
-
-                // Add active class to new current image
-                images[currentIndex].classList.add('active');
+                // Re-check visible images in case some failed to load
+                visibleImages = getVisibleImages();
+                if (visibleImages.length <= 1) {
+                    stopArtistImageCarousel(zoneId);
+                    return;
+                }
+                
+                // Find current active image index among visible images
+                const currentActive = visibleImages.findIndex(img => img.classList.contains('active'));
+                if (currentActive >= 0) {
+                    visibleImages[currentActive].classList.remove('active');
+                }
+                
+                // Move to next visible image
+                const nextIndex = (currentActive + 1) % visibleImages.length;
+                visibleImages[nextIndex].classList.add('active');
             };
 
             // Start the carousel with 5 second interval
@@ -798,6 +807,37 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             if (artistImageCarousels[zoneId]) {
                 clearInterval(artistImageCarousels[zoneId]);
                 delete artistImageCarousels[zoneId];
+            }
+        }
+
+        function handleArtistImageError(img) {
+            // Hide the failed image
+            img.style.display = 'none';
+            img.classList.remove('active');
+            
+            // Find the container and check remaining visible images
+            const container = img.closest('.artist-images');
+            if (!container) return;
+            
+            const zoneId = container.dataset.zoneId;
+            const visibleImages = Array.from(container.querySelectorAll('.artist-image')).filter(i => i.style.display !== 'none');
+            
+            // If no visible images remain, hide the container
+            if (visibleImages.length === 0) {
+                container.style.display = 'none';
+                stopArtistImageCarousel(zoneId);
+                return;
+            }
+            
+            // If the hidden image was active, activate the first visible one
+            if (!container.querySelector('.artist-image.active:not([style*="display: none"])')) {
+                visibleImages[0].classList.add('active');
+            }
+            
+            // Restart carousel with remaining images (or stop if only 1 left)
+            stopArtistImageCarousel(zoneId);
+            if (visibleImages.length > 1 && !container.classList.contains('hidden')) {
+                startArtistImageCarousel(zoneId);
             }
         }
 
@@ -972,7 +1012,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                 </div>
                                 ${zone.artist_image_keys && zone.artist_image_keys.length > 0 ? `
                                 <div class="artist-images" data-zone-id="${zone.zone_id}" onclick="toggleArtistImages('${zone.zone_id}')">
-                                    ${zone.artist_image_keys.map((key, index) => `<img src="/image/${key}" class="artist-image ${index === 0 ? 'active' : ''}" data-index="${index}" alt="Artist" />`).join('')}
+                                    ${zone.artist_image_keys.map((key, index) => `<img src="/image/${key}" class="artist-image ${index === 0 ? 'active' : ''}" data-index="${index}" alt="Artist" onerror="handleArtistImageError(this)" />`).join('')}
                                 </div>
                                 ` : ''}
                                 <div class="zone-controls-container">
@@ -1175,7 +1215,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
 
                             // Update existing container with carousel structure
                             artistImagesContainer.innerHTML = zone.artist_image_keys
-                                .map((key, index) => `<img src="/image/${encodeURIComponent(key)}" class="artist-image ${index === 0 ? 'active' : ''}" data-index="${index}" alt="Artist" />`)
+                                .map((key, index) => `<img src="/image/${encodeURIComponent(key)}" class="artist-image ${index === 0 ? 'active' : ''}" data-index="${index}" alt="Artist" onerror="handleArtistImageError(this)" />`)
                                 .join('');
 
                             // Restore visibility state
