@@ -59,6 +59,8 @@ pub fn get_command_definitions() -> Vec<CommandInfo> {
         CommandInfo { name: "upnp-playing", description: "Get comprehensive now playing info (state, track, format)", usage: Some("<url>") },
 
         // dCS API commands
+        CommandInfo { name: "dcs-discover", description: "Discover dCS devices on the network via mDNS (updates cache)", usage: None },
+        CommandInfo { name: "dcs-list", description: "List cached dCS devices", usage: None },
         CommandInfo { name: "dcs-playing", description: "Get current playback info (track, artist, album, format)", usage: Some("<host>") },
         CommandInfo { name: "dcs-format", description: "Get current audio format (sample rate, bit depth, input)", usage: Some("<host>") },
         CommandInfo { name: "dcs-settings", description: "Get device settings (display, sync mode)", usage: Some("<host>") },
@@ -770,6 +772,67 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                             }
                             Err(e) => return Err(format!("Failed to get service description: {}", e))
                         }
+                    }
+                    "dcs-discover" => {
+                        // Discover dCS devices on the network via mDNS and update cache
+                        out.writeln("".to_string());
+                        out.writeln("  Discovering dCS devices on the network...".to_string());
+                        out.writeln("".to_string());
+
+                        match dcs::refresh_device_cache() {
+                            Ok(devices) => {
+                                if devices.is_empty() {
+                                    out.writeln("  No dCS devices found.".to_string());
+                                } else {
+                                    out.writeln(format!("  Found {} dCS device(s):", devices.len()));
+                                    out.writeln("".to_string());
+
+                                    for device in &devices {
+                                        out.writeln(format!("  {} ({})", device.name, device.unit_type));
+                                        out.writeln(format!("    Hostname: {}", device.hostname));
+                                        if let Some(ip) = &device.ip {
+                                            out.writeln(format!("    IP:       {}", ip));
+                                        }
+                                        out.writeln(format!("    UUID:     {}", device.uuid));
+                                        if let Some(mfr) = &device.manufacturer {
+                                            out.writeln(format!("    Mfr:      {}", mfr));
+                                        }
+                                        out.writeln(format!("    API Host: {}", device.host()));
+                                        out.writeln("".to_string());
+                                    }
+                                }
+                                return Ok(());
+                            }
+                            Err(e) => return Err(format!("Failed to discover devices: {}", e))
+                        }
+                    }
+                    "dcs-list" => {
+                        // List cached dCS devices (without re-discovering)
+                        out.writeln("".to_string());
+                        
+                        let devices = dcs::get_cached_devices();
+                        if devices.is_empty() {
+                            out.writeln("  No dCS devices in cache. Run 'dcs-discover' to scan.".to_string());
+                        } else {
+                            out.writeln(format!("  Cached dCS device(s): {}", devices.len()));
+                            out.writeln("".to_string());
+
+                            for device in &devices {
+                                out.writeln(format!("  {} ({})", device.name, device.unit_type));
+                                out.writeln(format!("    Hostname: {}", device.hostname));
+                                if let Some(ip) = &device.ip {
+                                    out.writeln(format!("    IP:       {}", ip));
+                                }
+                                out.writeln(format!("    Port:     {}", device.port));
+                                out.writeln(format!("    UUID:     {}", device.uuid));
+                                if let Some(mfr) = &device.manufacturer {
+                                    out.writeln(format!("    Mfr:      {}", mfr));
+                                }
+                                out.writeln(format!("    API Host: {}", device.host()));
+                                out.writeln("".to_string());
+                            }
+                        }
+                        return Ok(());
                     }
                     "dcs-playing" => {
                         // Get dCS playback information
@@ -1597,6 +1660,8 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
         "upnp-state".to_string(),
         "upnp-playing".to_string(),
         // dCS API commands
+        "dcs-discover".to_string(),
+        "dcs-list".to_string(),
         "dcs-playing".to_string(),
         "dcs-format".to_string(),
         "dcs-settings".to_string(),

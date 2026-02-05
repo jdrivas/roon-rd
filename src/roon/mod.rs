@@ -107,13 +107,13 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
 
             log::debug!("Processing zone: {} ({}), state: {}", zone_name, zone_id, zone_state);
 
-            // Fetch dCS format on-demand if this is a dCS Vivaldi zone in Playing state
-            let dcs_format = if zone.display_name.starts_with("dCS Vivaldi")
-                && format!("{:?}", zone.state).to_lowercase() == "playing" {
+            // Fetch dCS format on-demand if this zone matches a discovered dCS device and is Playing
+            let dcs_format = if let Some(dcs_device) = dcs::find_device_for_zone(&zone.display_name) {
+                if format!("{:?}", zone.state).to_lowercase() == "playing" {
+                    log::debug!("Zone {} matched dCS device {} at {}, fetching format...", 
+                               zone_name, dcs_device.name, dcs_device.host());
 
-                log::debug!("Zone {} is dCS Vivaldi in Playing state, fetching format...", zone_name);
-
-                match dcs::get_playback_info("dcs-vivaldi.local").await {
+                    match dcs::get_playback_info(&dcs_device.host()).await {
                     Ok(playback_info) => {
                         log::debug!("dCS playback info retrieved for {}: {:?}", zone_name, playback_info);
                         // Extract format from audio_format field
@@ -180,9 +180,12 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                         None
                     }
                 }
+                } else {
+                    log::debug!("Zone {} matched dCS device but not in Playing state (state: {})",
+                               zone_name, format!("{:?}", zone.state));
+                    None
+                }
             } else {
-                log::debug!("Zone {} not eligible for dCS format (name: {}, state: {})",
-                           zone_id, zone.display_name, format!("{:?}", zone.state));
                 None
             };
 
@@ -855,12 +858,11 @@ impl RoonClient {
         // Process all zones in parallel
         let zone_futures: Vec<_> = zones.into_iter().map(|zone| {
             async move {
-                // Fetch dCS format on-demand if this is a dCS Vivaldi zone in Playing state
-                let dcs_format = if zone.display_name.starts_with("dCS Vivaldi")
-                    && format!("{:?}", zone.state).to_lowercase() == "playing" {
-
-                    match dcs::get_playback_info("dcs-vivaldi.local").await {
-                        Ok(playback_info) => {
+                // Fetch dCS format on-demand if this zone matches a discovered dCS device and is Playing
+                let dcs_format = if let Some(dcs_device) = dcs::find_device_for_zone(&zone.display_name) {
+                    if format!("{:?}", zone.state).to_lowercase() == "playing" {
+                        match dcs::get_playback_info(&dcs_device.host()).await {
+                            Ok(playback_info) => {
                             // Extract format from audio_format field
                             if let Some(audio_format) = playback_info.audio_format {
                                 // Only return format if bits_per_sample is valid (non-zero)
@@ -914,10 +916,13 @@ impl RoonClient {
                                 None
                             }
                         }
-                        Err(e) => {
-                            log::warn!("Failed to get dCS playback info: {}", e);
-                            None
+                            Err(e) => {
+                                log::warn!("Failed to get dCS playback info: {}", e);
+                                None
+                            }
                         }
+                    } else {
+                        None
                     }
                 } else {
                     None

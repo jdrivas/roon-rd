@@ -1,5 +1,12 @@
 # Roon Remote Display - TODO List
 
+-[] add support for handling different dCS devices on the same network E.g. Network Bridge, and Vivaldi. This probably entails mapping IP addresses to names/zones. But given that there seems to be a vivaldi.local address, perhaps we can find something for other devices too.
+-[] Add support for setting a roon zone as default, and to using names rather than IDs int he commands that require a zone ID. Similarly for DCS devices.
+-[] once the zone id thing is handled then we should also dynamically add auto-complete to zone-names. Similarly for DCS devices.
+-[] We might have an issue with TUI version deadlocking or becomming on response when there are command that are waiting for returns.  I wonder if we can unblock there and find a way to coordinate response reporting to the original command. 
+
+
+
 ## Future Investigations and Improvements
 
 ### Roon API Event Handling

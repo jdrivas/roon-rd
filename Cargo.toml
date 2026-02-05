@@ -1,6 +1,6 @@
 [package]
 name = "roon-rd"
-version = "1.4.7"
+version = "1.4.8"
 edition = "2021"
 authors = ["Momentlabs <david@momentlabs.io>"]
 repository = "https://github.com/jdrivas/roon-rd"
@@ -47,6 +47,10 @@ crossterm = "0.28"
 # UPnP/SSDP discovery and control
 ssdp-client = "1.0"
 rupnp = "2.0"
+
+# mDNS/Bonjour discovery
+mdns-sd = "0.11"
+flume = "0.11"
 reqwest = { version = "0.12", default-features = false, features = ["rustls-tls", "json"] }
 quick-xml = { version = "0.36", features = ["serialize"] }
 regex = "1.10"

@@ -2003,6 +2003,9 @@ const ROUTES: &[(&str, &str, &str)] = &[
 
 /// Start the web server
 pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+    // Pre-initialize dCS device cache (ensures blocking mDNS discovery runs before async zone processing)
+    let _ = crate::dcs::get_cached_devices();
+
     let state = AppState {
         roon_client: client,
     };

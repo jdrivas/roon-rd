@@ -1,5 +1,218 @@
 use serde::{Deserialize, Serialize};
 use std::error::Error;
+use std::collections::HashMap;
+use std::time::Duration;
+use mdns_sd::{ServiceDaemon, ServiceEvent};
+
+/// mDNS service type for dCS devices (StreamUnlimited Engine)
+const DCS_SERVICE_TYPE: &str = "_sueS800Device._tcp.local.";
+
+/// Represents a discovered dCS device on the network
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct DcsDevice {
+    /// Friendly name (e.g., "dCS Vivaldi Upsampler")
+    pub name: String,
+    /// Device type (e.g., "Vivaldi Upsampler", "Network Bridge")
+    pub unit_type: String,
+    /// Unique identifier (e.g., "Vivaldi-68c90b2ddc26")
+    pub uuid: String,
+    /// Hostname (e.g., "dcs-vivaldi.local")
+    pub hostname: String,
+    /// IP address
+    pub ip: Option<String>,
+    /// Port (usually 80)
+    pub port: u16,
+    /// Manufacturer
+    pub manufacturer: Option<String>,
+}
+
+impl DcsDevice {
+    /// Get the host string suitable for API calls (hostname:port or ip:port)
+    pub fn host(&self) -> String {
+        if self.port == 80 {
+            self.ip.clone().unwrap_or_else(|| self.hostname.clone())
+        } else {
+            format!("{}:{}", self.ip.clone().unwrap_or_else(|| self.hostname.clone()), self.port)
+        }
+    }
+}
+
+/// Discover dCS devices on the network using mDNS
+/// 
+/// Browses for `_sueS800Device._tcp` services which dCS devices advertise.
+/// Returns a list of discovered devices with their metadata.
+pub fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<dyn Error + Send + Sync>> {
+    log::info!("Starting dCS device discovery ({}s timeout)", timeout_secs);
+
+    let mdns = ServiceDaemon::new()?;
+    let receiver = mdns.browse(DCS_SERVICE_TYPE)?;
+
+    let mut devices: HashMap<String, DcsDevice> = HashMap::new();
+    let timeout = Duration::from_secs(timeout_secs);
+    let start = std::time::Instant::now();
+
+    while start.elapsed() < timeout {
+        match receiver.recv_timeout(Duration::from_millis(100)) {
+            Ok(event) => {
+                match event {
+                    ServiceEvent::ServiceResolved(info) => {
+                        log::debug!("Resolved dCS service: {:?}", info);
+
+                        // Parse TXT records for device metadata
+                        let properties = info.get_properties();
+                        
+                        let name = properties.get_property_val_str("name")
+                            .unwrap_or_else(|| info.get_fullname())
+                            .replace("\\", "")
+                            .to_string();
+                        
+                        let unit_type = properties.get_property_val_str("dcsunittype")
+                            .unwrap_or("Unknown")
+                            .replace("\\", "")
+                            .to_string();
+                        
+                        let uuid = properties.get_property_val_str("uuid")
+                            .unwrap_or_else(|| info.get_fullname())
+                            .to_string();
+                        
+                        let ip = properties.get_property_val_str("ip")
+                            .map(|s| s.to_string())
+                            .or_else(|| {
+                                // Fallback to addresses from service info
+                                info.get_addresses().iter().next().map(|a| a.to_string())
+                            });
+                        
+                        let manufacturer = properties.get_property_val_str("manufacturer")
+                            .map(|s| s.replace("\\", "").to_string());
+
+                        let hostname = info.get_hostname().trim_end_matches('.').to_string();
+                        let port = info.get_port();
+
+                        let device = DcsDevice {
+                            name,
+                            unit_type,
+                            uuid: uuid.clone(),
+                            hostname,
+                            ip,
+                            port,
+                            manufacturer,
+                        };
+
+                        log::info!("Discovered dCS device: {} ({}) at {}", 
+                                   device.name, device.unit_type, device.host());
+                        
+                        devices.insert(uuid, device);
+                    }
+                    ServiceEvent::SearchStarted(_) => {
+                        log::debug!("mDNS search started for dCS devices");
+                    }
+                    ServiceEvent::ServiceFound(_, _) => {
+                        // Service found but not yet resolved, wait for ServiceResolved
+                    }
+                    ServiceEvent::ServiceRemoved(_, fullname) => {
+                        log::debug!("dCS service removed: {}", fullname);
+                    }
+                    ServiceEvent::SearchStopped(_) => {
+                        log::debug!("mDNS search stopped");
+                        break;
+                    }
+                }
+            }
+            Err(flume::RecvTimeoutError::Timeout) => {
+                // Continue waiting
+            }
+            Err(flume::RecvTimeoutError::Disconnected) => {
+                log::debug!("mDNS receiver disconnected");
+                break;
+            }
+        }
+    }
+
+    // Stop browsing
+    let _ = mdns.stop_browse(DCS_SERVICE_TYPE);
+
+    let result: Vec<DcsDevice> = devices.into_values().collect();
+    log::info!("dCS discovery complete: found {} device(s)", result.len());
+
+    Ok(result)
+}
+
+// Global in-memory device cache using std::sync for thread safety
+use std::sync::{Mutex, OnceLock};
+
+static DEVICE_CACHE: OnceLock<Mutex<Vec<DcsDevice>>> = OnceLock::new();
+
+/// Get the device cache, initializing with discovery if needed
+fn get_device_cache() -> &'static Mutex<Vec<DcsDevice>> {
+    DEVICE_CACHE.get_or_init(|| {
+        log::info!("Initializing dCS device cache...");
+        let devices = discover_devices(3).unwrap_or_else(|e| {
+            log::warn!("Failed to discover dCS devices: {}", e);
+            Vec::new()
+        });
+        log::info!("dCS cache initialized with {} device(s)", devices.len());
+        Mutex::new(devices)
+    })
+}
+
+/// Refresh the device cache by running discovery again
+pub fn refresh_device_cache() -> Result<Vec<DcsDevice>, Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Discovering dCS devices...");
+    let devices = discover_devices(3)?;
+    
+    if let Ok(mut cache) = get_device_cache().lock() {
+        *cache = devices.clone();
+    }
+    log::info!("dCS cache refreshed with {} device(s)", devices.len());
+    
+    Ok(devices)
+}
+
+/// Get cached devices (runs discovery on first call)
+pub fn get_cached_devices() -> Vec<DcsDevice> {
+    get_device_cache()
+        .lock()
+        .map(|cache| cache.clone())
+        .unwrap_or_default()
+}
+
+/// Find a dCS device that matches a Roon zone name
+/// 
+/// Matches zone names like "dCS Vivaldi Upsampler" to devices with unit_type "Vivaldi Upsampler"
+/// or zone names containing "Network Bridge" to devices with that unit type.
+pub fn find_device_for_zone(zone_name: &str) -> Option<DcsDevice> {
+    let devices = get_cached_devices();
+    
+    log::debug!("find_device_for_zone: looking for zone '{}' in {} cached devices", 
+               zone_name, devices.len());
+    
+    // Try to match zone name to device unit_type or name
+    for device in &devices {
+        log::trace!("  Checking device '{}' (unit_type: '{}')", device.name, device.unit_type);
+        // Check if zone name contains the device's unit type (e.g., "Vivaldi Upsampler", "Network Bridge")
+        if zone_name.contains(&device.unit_type) {
+            log::debug!("Matched zone '{}' to dCS device '{}' ({})", 
+                       zone_name, device.name, device.unit_type);
+            return Some(device.clone());
+        }
+        
+        // Also check if zone name starts with "dCS" and contains part of the device name
+        if zone_name.starts_with("dCS") {
+            // Extract key words from device name for matching
+            let name_parts: Vec<&str> = device.name.split_whitespace().collect();
+            for part in name_parts {
+                if part.len() > 3 && zone_name.contains(part) {
+                    log::debug!("Matched zone '{}' to dCS device '{}' via name part '{}'", 
+                               zone_name, device.name, part);
+                    return Some(device.clone());
+                }
+            }
+        }
+    }
+    
+    log::debug!("No dCS device match found for zone '{}'", zone_name);
+    None
+}
 
 /// dCS API base URL helper
 fn api_url(host: &str, endpoint: &str, path: &str, roles: &str) -> String {
