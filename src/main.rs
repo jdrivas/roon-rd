@@ -41,6 +41,9 @@ enum Commands {
         /// Port to listen on
         #[arg(short, long, default_value = "3000")]
         port: u16,
+        /// Artist image carousel interval in seconds
+        #[arg(long, default_value = "30")]
+        carousel_interval: u32,
     },
     /// Interactive mode - read commands from stdin
     Interactive,
@@ -112,9 +115,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let query_string = args.join(" ");
             cli::handle_query(client, &query_string, cli.verbose).await?;
         }
-        Commands::Server { port } => {
+        Commands::Server { port, carousel_interval } => {
             if let Some(client) = client {
-                server::start_server(client, port).await?;
+                server::start_server(client, port, carousel_interval).await?;
             } else {
                 return Err("Server mode requires Roon connection. Remove --upnp-only flag.".into());
             }

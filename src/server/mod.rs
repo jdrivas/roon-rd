@@ -68,6 +68,7 @@ fn get_local_ip() -> String {
 #[derive(Clone)]
 pub struct AppState {
     pub roon_client: Arc<Mutex<RoonClient>>,
+    pub carousel_interval_ms: u32,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -848,8 +849,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 visibleImages[nextIndex].classList.add('active');
             };
 
-            // Start the carousel with 5 second interval
-            const intervalId = setInterval(rotateImage, 5000);
+            // Start the carousel with configurable interval
+            const intervalId = setInterval(rotateImage, __CAROUSEL_INTERVAL__);
 
             // Store the interval ID so we can stop it later
             artistImageCarousels[zoneId] = intervalId;
@@ -2094,13 +2095,14 @@ const ROUTES: &[(&str, &str, &str)] = &[
 ];
 
 /// Start the web server
-pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_interval: u32) -> Result<(), Box<dyn std::error::Error>> {
     // Start background dCS device discovery (non-blocking)
     // Discovery runs in background and notifies when complete
     crate::dcs::start_discovery();
 
     let state = AppState {
         roon_client: client,
+        carousel_interval_ms: carousel_interval * 1000, // Convert seconds to milliseconds
     };
 
     let app = Router::new()
@@ -2151,8 +2153,10 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
     Ok(())
 }
 
-async fn spa_handler() -> Html<String> {
-    let html = SPA_HTML.replace("__VERSION__", &format!("v{}", env!("CARGO_PKG_VERSION")));
+async fn spa_handler(State(state): State<AppState>) -> Html<String> {
+    let html = SPA_HTML
+        .replace("__VERSION__", &format!("v{}", env!("CARGO_PKG_VERSION")))
+        .replace("__CAROUSEL_INTERVAL__", &state.carousel_interval_ms.to_string());
     Html(html)
 }
 
