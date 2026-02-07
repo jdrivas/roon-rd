@@ -383,6 +383,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
         .queue-time {
             opacity: 0.8;
+            margin-left: auto;
         }
         .queue-time-value {
             font-family: 'Courier New', Courier, monospace;
@@ -817,6 +818,17 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             }
         }
 
+        // Determine if queue time should be shown
+        // Shows when: multiple queue items OR grouped work (queue time > current track remaining)
+        function hasQueueTimeToShow(zone) {
+            if (!zone.queue_time_remaining || zone.queue_time_remaining <= 0) return false;
+            // Multiple items in queue
+            if (zone.queue_items_remaining > 1) return true;
+            // Single item but it's a grouped work (queue time exceeds current track remaining by >30s)
+            const trackRemaining = (zone.length_seconds || 0) - (zone.position_seconds || 0);
+            return zone.queue_time_remaining > trackRemaining + 30;
+        }
+
         function startArtistImageCarousel(zoneId) {
             // Stop existing carousel for this zone if any
             stopArtistImageCarousel(zoneId);
@@ -1059,7 +1071,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         </div>
                                         <div class="queue-info">
                                             ${zone.queue_items_remaining > 1 ? `<span class="queue-count">${zone.queue_items_remaining - 1} track${zone.queue_items_remaining !== 2 ? 's' : ''} in the queue</span>` : ''}
-                                            ${zone.queue_items_remaining > 1 ? `<span class="queue-time"><span class="queue-time-value">${formatTime(zone.queue_time_remaining || 0)}</span> remaining</span>` : ''}
+                                            ${hasQueueTimeToShow(zone) ? `<span class="queue-time"><span class="queue-time-value">${formatTime(zone.queue_time_remaining || 0)}</span> ${zone.queue_items_remaining > 1 ? 'remaining' : 'total remaining'}</span>` : ''}
                                         </div>
                                     </div>
                                 </div>
@@ -1194,37 +1206,48 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 // Update queue info (track count and time remaining)
                 // Note: queue_items_remaining INCLUDES current track, so subtract 1 for display
                 // queue_time_remaining is total time for all remaining tracks including current
+                // Also show time for grouped works (operas/symphonies) even with 1 queue item
                 const queueInfo = element.querySelector('.queue-info');
                 if (queueInfo) {
                     const upcomingTracks = zone.queue_items_remaining - 1;
-                    if (upcomingTracks > 0) {
-                        const queueCount = queueInfo.querySelector('.queue-count');
-                        const queueTime = queueInfo.querySelector('.queue-time');
+                    const showQueueTime = hasQueueTimeToShow(zone);
+                    
+                    if (upcomingTracks > 0 || showQueueTime) {
+                        let queueCount = queueInfo.querySelector('.queue-count');
+                        let queueTime = queueInfo.querySelector('.queue-time');
                         
-                        const countText = `${upcomingTracks} track${upcomingTracks !== 1 ? 's' : ''} in the queue`;
-                        const timeText = `<span class="queue-time-value">${formatTime(zone.queue_time_remaining || 0)}</span> remaining`;
-                        
-                        if (queueCount) {
-                            queueCount.textContent = countText;
-                        } else {
-                            // Create queue count span if it doesn't exist
-                            const span = document.createElement('span');
-                            span.className = 'queue-count';
-                            span.textContent = countText;
-                            queueInfo.insertBefore(span, queueInfo.firstChild);
+                        // Show track count only if there are multiple queue items
+                        if (upcomingTracks > 0) {
+                            const countText = `${upcomingTracks} track${upcomingTracks !== 1 ? 's' : ''} in the queue`;
+                            if (queueCount) {
+                                queueCount.textContent = countText;
+                            } else {
+                                queueCount = document.createElement('span');
+                                queueCount.className = 'queue-count';
+                                queueCount.textContent = countText;
+                                queueInfo.insertBefore(queueCount, queueInfo.firstChild);
+                            }
+                        } else if (queueCount) {
+                            queueCount.remove();
                         }
                         
-                        if (queueTime) {
-                            queueTime.innerHTML = timeText;
-                        } else {
-                            // Create queue time span if it doesn't exist
-                            const span = document.createElement('span');
-                            span.className = 'queue-time';
-                            span.innerHTML = timeText;
-                            queueInfo.appendChild(span);
+                        // Show time remaining (for multiple items or grouped works)
+                        if (showQueueTime) {
+                            const remainingLabel = upcomingTracks > 0 ? 'remaining' : 'total remaining';
+                            const timeText = `<span class="queue-time-value">${formatTime(zone.queue_time_remaining || 0)}</span> ${remainingLabel}`;
+                            if (queueTime) {
+                                queueTime.innerHTML = timeText;
+                            } else {
+                                queueTime = document.createElement('span');
+                                queueTime.className = 'queue-time';
+                                queueTime.innerHTML = timeText;
+                                queueInfo.appendChild(queueTime);
+                            }
+                        } else if (queueTime) {
+                            queueTime.remove();
                         }
                     } else {
-                        // No queue items, clear the info
+                        // No queue items and no grouped work, clear the info
                         queueInfo.innerHTML = '';
                     }
                 }
@@ -1588,15 +1611,24 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             }
 
             // Update queue time remaining (queue_time_remaining already includes current track time)
-            if (queueTimeElement && queueTimeRemaining != null && zoneData.queue_items_remaining > 1) {
-                if (queueTimeRemaining > 0) {
-                    queueTimeElement.innerHTML = `<span class="queue-time-value">${formatTime(queueTimeRemaining)}</span> remaining`;
+            // Also update for grouped works (operas/symphonies) even with 1 queue item
+            if (queueTimeElement && queueTimeRemaining != null) {
+                // Update the cached zone data for hasQueueTimeToShow check
+                zoneData.queue_time_remaining = queueTimeRemaining;
+                
+                if (hasQueueTimeToShow(zoneData)) {
+                    const remainingLabel = zoneData.queue_items_remaining > 1 ? 'remaining' : 'total remaining';
+                    queueTimeElement.innerHTML = `<span class="queue-time-value">${formatTime(queueTimeRemaining)}</span> ${remainingLabel}`;
+                    queueTimeElement.style.display = '';
+                } else {
+                    queueTimeElement.style.display = 'none';
                 }
             }
         }
 
         // Update queue info display when queue changes (e.g., user clears queue or skips track)
         // Note: queue_items_remaining INCLUDES current track, so subtract 1 for display
+        // Also handles grouped works (operas/symphonies) where 1 queue item contains many tracks
         function updateQueueInfo(zoneId, queueItemsRemaining, queueTimeRemaining) {
             const zoneElement = document.querySelector(`[data-zone-id="${zoneId}"]`);
             if (!zoneElement) return;
@@ -1612,32 +1644,44 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             }
 
             const upcomingTracks = queueItemsRemaining - 1;
-            if (upcomingTracks > 0) {
-                const countText = `${upcomingTracks} track${upcomingTracks !== 1 ? 's' : ''} in the queue`;
-                const timeText = `<span class="queue-time-value">${formatTime(queueTimeRemaining || 0)}</span> remaining`;
-
+            const showQueueTime = zoneData ? hasQueueTimeToShow(zoneData) : (queueTimeRemaining > 0);
+            
+            if (upcomingTracks > 0 || showQueueTime) {
                 let queueCount = queueInfo.querySelector('.queue-count');
                 let queueTime = queueInfo.querySelector('.queue-time');
 
-                if (queueCount) {
-                    queueCount.textContent = countText;
-                } else {
-                    queueCount = document.createElement('span');
-                    queueCount.className = 'queue-count';
-                    queueCount.textContent = countText;
-                    queueInfo.insertBefore(queueCount, queueInfo.firstChild);
+                // Show track count only if there are multiple queue items
+                if (upcomingTracks > 0) {
+                    const countText = `${upcomingTracks} track${upcomingTracks !== 1 ? 's' : ''} in the queue`;
+                    if (queueCount) {
+                        queueCount.textContent = countText;
+                    } else {
+                        queueCount = document.createElement('span');
+                        queueCount.className = 'queue-count';
+                        queueCount.textContent = countText;
+                        queueInfo.insertBefore(queueCount, queueInfo.firstChild);
+                    }
+                } else if (queueCount) {
+                    queueCount.remove();
                 }
 
-                if (queueTime) {
-                    queueTime.innerHTML = timeText;
-                } else {
-                    queueTime = document.createElement('span');
-                    queueTime.className = 'queue-time';
-                    queueTime.innerHTML = timeText;
-                    queueInfo.appendChild(queueTime);
+                // Show time remaining (for multiple items or grouped works)
+                if (showQueueTime) {
+                    const remainingLabel = upcomingTracks > 0 ? 'remaining' : 'total remaining';
+                    const timeText = `<span class="queue-time-value">${formatTime(queueTimeRemaining || 0)}</span> ${remainingLabel}`;
+                    if (queueTime) {
+                        queueTime.innerHTML = timeText;
+                    } else {
+                        queueTime = document.createElement('span');
+                        queueTime.className = 'queue-time';
+                        queueTime.innerHTML = timeText;
+                        queueInfo.appendChild(queueTime);
+                    }
+                } else if (queueTime) {
+                    queueTime.remove();
                 }
             } else {
-                // No queue items, clear the info
+                // No queue items and no grouped work, clear the info
                 queueInfo.innerHTML = '';
             }
         }
