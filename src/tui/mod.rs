@@ -299,6 +299,10 @@ pub struct App {
     event_scroll_offset: usize,
     /// Available commands for completion
     commands: Vec<String>,
+    /// Zone names for completion
+    zone_names: Arc<StdMutex<Vec<String>>>,
+    /// dCS device names for completion
+    dcs_names: Arc<StdMutex<Vec<String>>>,
     /// Current completion candidates
     completion_candidates: Vec<String>,
     /// Current position in completion candidates
@@ -312,7 +316,13 @@ pub struct App {
 }
 
 impl App {
-    pub fn new<F>(message_buffer: Arc<StdMutex<MessageBuffer>>, prompt_fn: F, commands: Vec<String>) -> Self
+    pub fn new<F>(
+        message_buffer: Arc<StdMutex<MessageBuffer>>,
+        prompt_fn: F,
+        commands: Vec<String>,
+        zone_names: Arc<StdMutex<Vec<String>>>,
+        dcs_names: Arc<StdMutex<Vec<String>>>,
+    ) -> Self
     where
         F: Fn() -> String + Send + 'static,
     {
@@ -334,6 +344,8 @@ impl App {
             event_scrollbar_state: ScrollbarState::default(),
             event_scroll_offset: 0,
             commands,
+            zone_names,
+            dcs_names,
             completion_candidates: Vec::new(),
             completion_index: None,
             maximized_window: MaximizedWindow::None,
@@ -358,23 +370,64 @@ impl App {
         }
     }
 
-    /// Complete current input with matching commands
+    /// Complete current input with matching commands or arguments
     fn complete(&mut self) {
-        // Get the current word (first word in input)
         let input_trimmed = self.input.trim_start();
+        let words: Vec<&str> = input_trimmed.split_whitespace().collect();
 
         // If we're not already in a completion cycle, find candidates
         if self.completion_index.is_none() {
             self.completion_candidates.clear();
 
-            if input_trimmed.is_empty() {
-                // No input - show all commands
-                self.completion_candidates = self.commands.clone();
-            } else {
-                // Find matching commands
+            // Determine if we're completing a command or an argument
+            let is_completing_command = words.is_empty() || 
+                (words.len() == 1 && !input_trimmed.ends_with(' '));
+
+            if is_completing_command {
+                // Complete command name
+                let prefix = if words.is_empty() { "" } else { words[0] };
                 for cmd in &self.commands {
-                    if cmd.starts_with(input_trimmed) {
+                    if cmd.to_lowercase().starts_with(&prefix.to_lowercase()) {
                         self.completion_candidates.push(cmd.clone());
+                    }
+                }
+            } else {
+                // Complete argument based on command
+                let command = words[0];
+                let prefix = if input_trimmed.ends_with(' ') {
+                    ""
+                } else if words.len() > 1 {
+                    words[words.len() - 1]
+                } else {
+                    ""
+                };
+
+                let zone_commands = ["default-zone", "play", "pause", "stop", "mute", "queue"];
+                let dcs_commands = ["default-dcs", "dcs-playing", "dcs-format", "dcs-settings",
+                    "dcs-upsampler", "dcs-inputs", "dcs-playmode", "dcs-menu",
+                    "dcs-set-brightness", "dcs-set-display"];
+
+                if zone_commands.contains(&command) {
+                    // Complete with zone names
+                    if let Ok(zones) = self.zone_names.lock() {
+                        for zone in zones.iter() {
+                            if zone.to_lowercase().contains(&prefix.to_lowercase()) {
+                                // Build full command with zone name
+                                let full = format!("{} {}", command, zone);
+                                self.completion_candidates.push(full);
+                            }
+                        }
+                    }
+                } else if dcs_commands.contains(&command) {
+                    // Complete with dCS device names
+                    if let Ok(devices) = self.dcs_names.lock() {
+                        for device in devices.iter() {
+                            if device.to_lowercase().contains(&prefix.to_lowercase()) {
+                                // Build full command with device name
+                                let full = format!("{} {}", command, device);
+                                self.completion_candidates.push(full);
+                            }
+                        }
                     }
                 }
             }
@@ -1096,9 +1149,76 @@ impl App {
                 Span::raw(&self.input),
             ])];
 
+            // Build input title with completion info
+            let input_title = if self.completion_candidates.len() > 1 {
+                if let Some(idx) = self.completion_index {
+                    format!("Input ({}/{} - Tab to cycle)", idx + 1, self.completion_candidates.len())
+                } else {
+                    "Input".to_string()
+                }
+            } else {
+                "Input".to_string()
+            };
+
             let input_widget = Paragraph::new(input_text)
-                .block(Block::default().borders(Borders::ALL).title("Input"));
+                .block(Block::default().borders(Borders::ALL).title(input_title));
             f.render_widget(input_widget, chunks[input_chunk_idx]);
+
+            // Render completion popup if we have multiple candidates
+            if self.completion_candidates.len() > 1 {
+                use ratatui::widgets::Clear;
+                
+                // Calculate popup dimensions
+                let max_width = self.completion_candidates.iter()
+                    .map(|c| c.len())
+                    .max()
+                    .unwrap_or(10) as u16 + 4;
+                let popup_height = (self.completion_candidates.len().min(8) + 2) as u16;
+                let popup_width = max_width.min(chunks[input_chunk_idx].width.saturating_sub(2));
+                
+                // Position popup above the input area
+                let popup_x = chunks[input_chunk_idx].x + 1;
+                let popup_y = chunks[input_chunk_idx].y.saturating_sub(popup_height);
+                
+                let popup_area = Rect {
+                    x: popup_x,
+                    y: popup_y,
+                    width: popup_width,
+                    height: popup_height,
+                };
+                
+                // Clear the area and render completion list
+                f.render_widget(Clear, popup_area);
+                
+                let current_idx = self.completion_index.unwrap_or(0);
+                let completion_lines: Vec<Line> = self.completion_candidates.iter()
+                    .take(8)
+                    .enumerate()
+                    .map(|(i, c)| {
+                        if i == current_idx {
+                            // Selected item: cyan background with black text
+                            Line::from(Span::styled(
+                                format!(" {} ", c),
+                                Style::default().bg(Color::Cyan).fg(Color::Black)
+                            ))
+                        } else {
+                            // Unselected items: dark gray text on light background
+                            Line::from(Span::styled(
+                                format!(" {} ", c),
+                                Style::default().fg(Color::DarkGray)
+                            ))
+                        }
+                    })
+                    .collect();
+                
+                let completion_widget = Paragraph::new(completion_lines)
+                    .block(Block::default()
+                        .borders(Borders::ALL)
+                        .title("Completions")
+                        .border_style(Style::default().fg(Color::Cyan))
+                        .style(Style::default().bg(Color::White).fg(Color::Black)));
+                f.render_widget(completion_widget, popup_area);
+            }
 
             // Set cursor position
             f.set_cursor_position((
@@ -1199,6 +1319,10 @@ impl App {
                     Line::from(vec![
                         Span::styled("zones", Style::default().fg(Color::DarkGray)),
                         Span::styled("           List available zones", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("default-zone", Style::default().fg(Color::DarkGray)),
+                        Span::styled("    Set/show default zone", Style::default().fg(Color::Black)),
                     ]),
                     Line::from(vec![
                         Span::styled("help", Style::default().fg(Color::DarkGray)),
@@ -1315,6 +1439,21 @@ impl App {
             3 => {
                 // Page 4: dCS Commands
                 (vec![
+                    Line::from(Span::styled("Discovery & Defaults", Style::default().fg(Color::Blue))),
+                    Line::from(""),
+                    Line::from(vec![
+                        Span::styled("dcs-discover", Style::default().fg(Color::DarkGray)),
+                        Span::styled("    Discover dCS devices", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("dcs-list", Style::default().fg(Color::DarkGray)),
+                        Span::styled("        List cached devices", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("default-dcs", Style::default().fg(Color::DarkGray)),
+                        Span::styled("     Set/show default device", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(""),
                     Line::from(Span::styled("Playback Information", Style::default().fg(Color::Blue))),
                     Line::from(""),
                     Line::from(vec![
@@ -1418,6 +1557,8 @@ pub async fn run_tui_async<F, Fut, P>(
     exit_flag: Arc<StdMutex<bool>>,
     commands: Vec<String>,
     ws_rx: Option<tokio::sync::broadcast::Receiver<crate::roon::WsMessage>>,
+    zone_names: Arc<StdMutex<Vec<String>>>,
+    dcs_names: Arc<StdMutex<Vec<String>>>,
 ) -> io::Result<()>
 where
     F: Fn(String) -> Fut + 'static,
@@ -1434,8 +1575,11 @@ where
     let backend = CrosstermBackend::new(stdout);
     let mut terminal = Terminal::new(backend)?;
 
+    // Clone zone_names for updating in event handler
+    let zone_names_for_events = zone_names.clone();
+
     // Create app
-    let mut app = App::new(message_buffer.clone(), prompt_fn, commands);
+    let mut app = App::new(message_buffer.clone(), prompt_fn, commands, zone_names, dcs_names);
 
     // Setup event buffer and zone buffer if we have a WebSocket receiver
     if let Some(mut ws_rx) = ws_rx {
@@ -1526,6 +1670,22 @@ where
 
                     if let Ok(mut buffer) = zone_buffer.lock() {
                         buffer.update(zones);
+                    }
+                    
+                    // Update zone names for completion
+                    // Extract base zone name (before any parentheses) for cleaner completion
+                    let zone_names_list: Vec<String> = now_playing.iter()
+                        .map(|z| {
+                            // zone_name may be "Zone (Source)" - extract just "Zone"
+                            if let Some(paren_pos) = z.zone_name.find(" (") {
+                                z.zone_name[..paren_pos].to_string()
+                            } else {
+                                z.zone_name.clone()
+                            }
+                        })
+                        .collect();
+                    if let Ok(mut zn) = zone_names_for_events.lock() {
+                        *zn = zone_names_list;
                     }
                 }
             }

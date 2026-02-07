@@ -41,12 +41,13 @@ pub fn get_command_definitions() -> Vec<CommandInfo> {
         CommandInfo { name: "status", description: "Show connection status", usage: None },
         CommandInfo { name: "reconnect", description: "Reconnect to Roon Core", usage: None },
         CommandInfo { name: "zones", description: "List available zones", usage: None },
+        CommandInfo { name: "default-zone", description: "Set or show the default zone for playback commands", usage: Some("[zone_name]") },
         CommandInfo { name: "now-playing", description: "Show currently playing tracks", usage: None },
         CommandInfo { name: "queue", description: "Show queue for zone (defaults to first playing zone)", usage: Some("[zone]") },
-        CommandInfo { name: "play", description: "Start playback in zone", usage: Some("<zone_id>") },
-        CommandInfo { name: "pause", description: "Pause playback in zone", usage: Some("<zone_id>") },
-        CommandInfo { name: "stop", description: "Stop playback in zone", usage: Some("<zone_id>") },
-        CommandInfo { name: "mute", description: "Toggle mute for zone", usage: Some("<zone_id>") },
+        CommandInfo { name: "play", description: "Start playback in zone (uses default zone if set)", usage: Some("[zone_id]") },
+        CommandInfo { name: "pause", description: "Pause playback in zone (uses default zone if set)", usage: Some("[zone_id]") },
+        CommandInfo { name: "stop", description: "Stop playback in zone (uses default zone if set)", usage: Some("[zone_id]") },
+        CommandInfo { name: "mute", description: "Toggle mute for zone (uses default zone if set)", usage: Some("[zone_id]") },
 
         // UPnP commands
         CommandInfo { name: "upnp-discover", description: "Discover all UPnP devices on network", usage: None },
@@ -61,27 +62,61 @@ pub fn get_command_definitions() -> Vec<CommandInfo> {
         // dCS API commands
         CommandInfo { name: "dcs-discover", description: "Discover dCS devices on the network via mDNS (updates cache)", usage: None },
         CommandInfo { name: "dcs-list", description: "List cached dCS devices", usage: None },
-        CommandInfo { name: "dcs-playing", description: "Get current playback info (track, artist, album, format)", usage: Some("<host>") },
-        CommandInfo { name: "dcs-format", description: "Get current audio format (sample rate, bit depth, input)", usage: Some("<host>") },
-        CommandInfo { name: "dcs-settings", description: "Get device settings (display, sync mode)", usage: Some("<host>") },
-        CommandInfo { name: "dcs-upsampler", description: "Get upsampler settings (output rate, filter)", usage: Some("<host>") },
-        CommandInfo { name: "dcs-inputs", description: "Get current and available digital inputs", usage: Some("<host>") },
-        CommandInfo { name: "dcs-playmode", description: "Get current play mode (Network, USB, etc)", usage: Some("<host>") },
-        CommandInfo { name: "dcs-menu", description: "Get available menu options for device", usage: Some("<host>") },
-        CommandInfo { name: "dcs-set-brightness", description: "Set display brightness (0-4)", usage: Some("<host> <level>") },
-        CommandInfo { name: "dcs-set-display", description: "Set display mode (on/off)", usage: Some("<host> <on|off>") },
+        CommandInfo { name: "default-dcs", description: "Set or show the default dCS device", usage: Some("[device_name]") },
+        CommandInfo { name: "dcs-playing", description: "Get current playback info (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-format", description: "Get current audio format (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-settings", description: "Get device settings (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-upsampler", description: "Get upsampler settings (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-inputs", description: "Get current and available digital inputs (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-playmode", description: "Get current play mode (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-menu", description: "Get available menu options (uses default device if set)", usage: Some("[host]") },
+        CommandInfo { name: "dcs-set-brightness", description: "Set display brightness (uses default device if set)", usage: Some("[host] <level>") },
+        CommandInfo { name: "dcs-set-display", description: "Set display mode (uses default device if set)", usage: Some("[host] <on|off>") },
     ]
+}
+
+/// Shared completion data for dynamic completions
+#[derive(Clone)]
+pub struct CompletionData {
+    pub zone_names: Arc<StdMutex<Vec<String>>>,
+    pub dcs_names: Arc<StdMutex<Vec<String>>>,
+}
+
+impl CompletionData {
+    pub fn new() -> Self {
+        Self {
+            zone_names: Arc::new(StdMutex::new(Vec::new())),
+            dcs_names: Arc::new(StdMutex::new(Vec::new())),
+        }
+    }
+
+    /// Update zone names from current zones
+    pub fn update_zones(&self, zones: Vec<String>) {
+        if let Ok(mut names) = self.zone_names.lock() {
+            *names = zones;
+        }
+    }
+
+    /// Update dCS device names from cache
+    pub fn update_dcs_devices(&self) {
+        let devices = dcs::get_cached_devices();
+        let names: Vec<String> = devices.iter().map(|d| d.hostname.clone()).collect();
+        if let Ok(mut dcs_names) = self.dcs_names.lock() {
+            *dcs_names = names;
+        }
+    }
 }
 
 /// Command completer for interactive mode
 struct CommandCompleter {
     commands: Vec<String>,
+    completion_data: Option<CompletionData>,
 }
 
 impl CommandCompleter {
-    fn new(include_roon_commands: bool) -> Self {
+    fn new(include_roon_commands: bool, completion_data: Option<CompletionData>) -> Self {
         let definitions = get_command_definitions();
-        let roon_commands = ["status", "reconnect", "zones", "now-playing", "queue", "play", "pause", "stop", "mute"];
+        let roon_commands = ["status", "reconnect", "zones", "default-zone", "now-playing", "queue", "play", "pause", "stop", "mute"];
 
         let commands: Vec<String> = definitions
             .iter()
@@ -92,7 +127,7 @@ impl CommandCompleter {
             .map(|cmd| cmd.name.to_string())
             .collect();
 
-        Self { commands }
+        Self { commands, completion_data }
     }
 }
 
@@ -108,17 +143,60 @@ impl Completer for CommandCompleter {
         let start = line[..pos].rfind(' ').map(|i| i + 1).unwrap_or(0);
         let prefix = &line[start..pos];
 
-        let matches: Vec<Pair> = self
-            .commands
-            .iter()
-            .filter(|cmd| cmd.starts_with(prefix))
-            .map(|cmd| Pair {
-                display: cmd.clone(),
-                replacement: cmd.clone(),
-            })
-            .collect();
+        // Check if we're completing first word (command) or subsequent words (arguments)
+        let words: Vec<&str> = line[..pos].split_whitespace().collect();
+        
+        if words.is_empty() || (words.len() == 1 && !line[..pos].ends_with(' ')) {
+            // Completing command name
+            let matches: Vec<Pair> = self
+                .commands
+                .iter()
+                .filter(|cmd| cmd.to_lowercase().starts_with(&prefix.to_lowercase()))
+                .map(|cmd| Pair {
+                    display: cmd.clone(),
+                    replacement: cmd.clone(),
+                })
+                .collect();
+            Ok((start, matches))
+        } else if let Some(ref completion_data) = self.completion_data {
+            // Completing arguments - check which command we're completing for
+            let command = words[0];
+            let zone_commands = ["default-zone", "play", "pause", "stop", "mute", "queue"];
+            let dcs_commands = ["default-dcs", "dcs-playing", "dcs-format", "dcs-settings", 
+                "dcs-upsampler", "dcs-inputs", "dcs-playmode", "dcs-menu",
+                "dcs-set-brightness", "dcs-set-display"];
 
-        Ok((start, matches))
+            if zone_commands.contains(&command) {
+                // Complete with zone names
+                if let Ok(zones) = completion_data.zone_names.lock() {
+                    let matches: Vec<Pair> = zones
+                        .iter()
+                        .filter(|z| z.to_lowercase().contains(&prefix.to_lowercase()))
+                        .map(|z| Pair {
+                            display: z.clone(),
+                            replacement: z.clone(),
+                        })
+                        .collect();
+                    return Ok((start, matches));
+                }
+            } else if dcs_commands.contains(&command) {
+                // Complete with dCS device names
+                if let Ok(devices) = completion_data.dcs_names.lock() {
+                    let matches: Vec<Pair> = devices
+                        .iter()
+                        .filter(|d| d.to_lowercase().contains(&prefix.to_lowercase()))
+                        .map(|d| Pair {
+                            display: d.clone(),
+                            replacement: d.clone(),
+                        })
+                        .collect();
+                    return Ok((start, matches));
+                }
+            }
+            Ok((start, Vec::new()))
+        } else {
+            Ok((start, Vec::new()))
+        }
     }
 }
 
@@ -502,9 +580,9 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
 
             // Group commands by category
             let general_cmds = ["help", "quit", "exit", "verbose", "version"];
-            let roon_cmds = ["status", "reconnect", "zones", "now-playing", "queue", "play", "pause", "stop", "mute"];
+            let roon_cmds = ["status", "reconnect", "zones", "default-zone", "now-playing", "queue", "play", "pause", "stop", "mute"];
             let upnp_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("upnp-")).collect();
-            let dcs_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("dcs-")).collect();
+            let dcs_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("dcs-") || c.name == "default-dcs").collect();
 
             // Roon Commands
             out.writeln("  Roon Commands:".to_string());
@@ -1290,6 +1368,12 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
     };
     log::set_max_level(current_log_level);
 
+    // Default zone for playback commands (zone_id, display_name)
+    let mut default_zone: Option<(String, String)> = None;
+
+    // Default dCS device for dCS commands (api_host, display_name)
+    let mut default_dcs: Option<(String, String)> = None;
+
     println!();
     if client.is_some() {
         println!("Roon Remote Display - Interactive Mode");
@@ -1324,7 +1408,21 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
         .completion_type(CompletionType::List)
         .build();
 
-    let helper = CommandCompleter::new(client.is_some());
+    // Create completion data for dynamic zone/dCS completions
+    let completion_data = CompletionData::new();
+    
+    // Initialize dCS device names from cache
+    completion_data.update_dcs_devices();
+    
+    // Initialize zone names if we have a client
+    if let Some(ref client_arc) = client {
+        let client_guard = client_arc.lock().await;
+        let zones = client_guard.get_zones().await;
+        let zone_names: Vec<String> = zones.iter().map(|z| z.display_name.clone()).collect();
+        completion_data.update_zones(zone_names);
+    }
+
+    let helper = CommandCompleter::new(client.is_some(), Some(completion_data.clone()));
     let mut rl = Editor::with_config(config)?;
     rl.set_helper(Some(helper));
 
@@ -1481,18 +1579,158 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                     continue;
                 }
 
+                // Handle default-zone command
+                if command.starts_with("default-zone") {
+                    if let Some(ref client_arc) = client {
+                        let client = client_arc.lock().await;
+                        let parts: Vec<&str> = command.split_whitespace().collect();
+
+                        if parts.len() == 1 {
+                            // Show current default zone
+                            println!();
+                            if let Some((ref zone_id, ref name)) = default_zone {
+                                println!("  Default zone: {} (ID: {})", name.bold().green(), zone_id);
+                            } else {
+                                println!("  No default zone set.");
+                                println!("  Usage: default-zone <zone_name>");
+                                println!("  Use 'zones' to see available zones.");
+                            }
+                            println!();
+                        } else {
+                            // Set default zone by name (partial match)
+                            let zone_name = parts[1..].join(" ");
+                            let zones = client.get_zones().await;
+
+                            if let Some(zone) = zones.iter().find(|z| 
+                                z.display_name.to_lowercase().contains(&zone_name.to_lowercase())
+                            ) {
+                                default_zone = Some((zone.zone_id.clone(), zone.display_name.clone()));
+                                println!();
+                                println!("  Default zone set to: {}", zone.display_name.bold().green());
+                                println!("  Zone ID: {}", zone.zone_id);
+                                println!();
+                            } else {
+                                println!();
+                                println!("  {} Zone '{}' not found.", "Error:".bold().red(), zone_name);
+                                println!("  Use 'zones' to see available zones.");
+                                println!();
+                            }
+                        }
+                    } else {
+                        println!();
+                        println!("  {} Roon commands require connection. Remove --upnp-only flag.", "Error:".bold().red());
+                        println!();
+                    }
+                    continue;
+                }
+
+                // Handle default-dcs command
+                if command.starts_with("default-dcs") {
+                    let parts: Vec<&str> = command.split_whitespace().collect();
+
+                    if parts.len() == 1 {
+                        // Show current default dCS device
+                        println!();
+                        if let Some((ref host, ref name)) = default_dcs {
+                            println!("  Default dCS device: {} (Host: {})", name.bold().green(), host);
+                        } else {
+                            println!("  No default dCS device set.");
+                            println!("  Usage: default-dcs <device_name>");
+                            println!("  Use 'dcs-list' to see available devices.");
+                        }
+                        println!();
+                    } else {
+                        // Set default dCS device by name (partial match)
+                        let device_name = parts[1..].join(" ");
+                        let devices = crate::dcs::get_cached_devices();
+
+                        if let Some(device) = devices.iter().find(|d| 
+                            d.hostname.to_lowercase().contains(&device_name.to_lowercase())
+                        ) {
+                            let api_host = device.host();
+                            let display_name = device.hostname.clone();
+                            default_dcs = Some((api_host.clone(), display_name.clone()));
+                            println!();
+                            println!("  Default dCS device set to: {}", display_name.bold().green());
+                            println!("  API Host: {}", api_host);
+                            println!();
+                        } else {
+                            println!();
+                            println!("  {} Device '{}' not found.", "Error:".bold().red(), device_name);
+                            println!("  Use 'dcs-list' to see available devices, or 'dcs-discover' to scan.");
+                            println!();
+                        }
+                    }
+                    continue;
+                }
+
+                // Check if command needs default zone applied
+                let command = {
+                    let parts: Vec<&str> = command.split_whitespace().collect();
+                    if parts.len() == 1 && ["play", "pause", "stop", "mute"].contains(&parts[0]) {
+                        if let Some((ref zone_id, ref name)) = default_zone {
+                            println!("  Using default zone: {}", name.cyan());
+                            format!("{} {}", parts[0], zone_id)
+                        } else {
+                            command.to_string()
+                        }
+                    } else {
+                        command.to_string()
+                    }
+                };
+
+                // Check if dCS command needs default device applied
+                let command = {
+                    let parts: Vec<&str> = command.split_whitespace().collect();
+                    let dcs_commands_needing_host = ["dcs-playing", "dcs-format", "dcs-settings", 
+                        "dcs-upsampler", "dcs-inputs", "dcs-playmode", "dcs-menu"];
+                    let dcs_commands_needing_host_plus_arg = ["dcs-set-brightness", "dcs-set-display"];
+                    
+                    if parts.len() == 1 && dcs_commands_needing_host.contains(&parts[0]) {
+                        // Command with no args - use default
+                        if let Some((ref host, ref name)) = default_dcs {
+                            println!("  Using default dCS device: {}", name.cyan());
+                            format!("{} {}", parts[0], host)
+                        } else {
+                            command
+                        }
+                    } else if parts.len() == 2 && dcs_commands_needing_host_plus_arg.contains(&parts[0]) {
+                        // Command with just the value arg (e.g., "dcs-set-brightness 3") - use default for host
+                        if let Some((ref host, ref name)) = default_dcs {
+                            println!("  Using default dCS device: {}", name.cyan());
+                            format!("{} {} {}", parts[0], host, parts[1])
+                        } else {
+                            command
+                        }
+                    } else {
+                        command
+                    }
+                };
+
                 // Execute the command
                 if let Some(ref client) = client {
                     let client = client.lock().await;
-                    if let Err(e) = execute_query(Some(&client), command, verbose).await {
+                    if let Err(e) = execute_query(Some(&client), &command, verbose).await {
                         println!("  Error: {}", e);
                         println!();
+                    }
+                    
+                    // Refresh zone completions after zone-related commands
+                    if command == "zones" || command == "reconnect" {
+                        let zones = client.get_zones().await;
+                        let zone_names: Vec<String> = zones.iter().map(|z| z.display_name.clone()).collect();
+                        completion_data.update_zones(zone_names);
                     }
                 } else {
-                    if let Err(e) = execute_query(None, command, verbose).await {
+                    if let Err(e) = execute_query(None, &command, verbose).await {
                         println!("  Error: {}", e);
                         println!();
                     }
+                }
+                
+                // Refresh dCS completions after dcs-discover
+                if command == "dcs-discover" {
+                    completion_data.update_dcs_devices();
                 }
             }
             Err(ReadlineError::Interrupted) => {
@@ -1525,6 +1763,12 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
 
     // Create message buffer
     let message_buffer = Arc::new(StdMutex::new(tui::MessageBuffer::new(1000)));
+
+    // Default zone for playback commands (zone_id, display_name)
+    let default_zone: Arc<StdMutex<Option<(String, String)>>> = Arc::new(StdMutex::new(None));
+
+    // Default dCS device for dCS commands (api_host, display_name)
+    let default_dcs: Arc<StdMutex<Option<(String, String)>>> = Arc::new(StdMutex::new(None));
 
     // Set up TUI logger with shared mutable log level
     let current_log_level = Arc::new(StdMutex::new(if verbose_flag {
@@ -1662,6 +1906,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
         // dCS API commands
         "dcs-discover".to_string(),
         "dcs-list".to_string(),
+        "default-dcs".to_string(),
         "dcs-playing".to_string(),
         "dcs-format".to_string(),
         "dcs-settings".to_string(),
@@ -1679,6 +1924,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
             "status".to_string(),
             "reconnect".to_string(),
             "zones".to_string(),
+            "default-zone".to_string(),
             "now-playing".to_string(),
             "queue".to_string(),
             "play".to_string(),
@@ -1696,12 +1942,47 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
         None
     };
 
+    // Clone default_zone and default_dcs for use in command handler
+    let default_zone_for_handler = default_zone.clone();
+    let default_dcs_for_handler = default_dcs.clone();
+
+    // Create shared completion data for zone and dCS names
+    let zone_names: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+    let dcs_names: Arc<StdMutex<Vec<String>>> = Arc::new(StdMutex::new(Vec::new()));
+    
+    // Initialize zone names if we have a client
+    if let Some(ref client_arc) = client {
+        let client_guard = client_arc.lock().await;
+        let zones = client_guard.get_zones().await;
+        let names: Vec<String> = zones.iter().map(|z| z.display_name.clone()).collect();
+        if let Ok(mut zn) = zone_names.lock() {
+            *zn = names;
+        }
+    }
+    
+    // Initialize dCS device names from cache
+    {
+        let devices = dcs::get_cached_devices();
+        let names: Vec<String> = devices.iter().map(|d| d.hostname.clone()).collect();
+        if let Ok(mut dn) = dcs_names.lock() {
+            *dn = names;
+        }
+    }
+    
+    // Clone zone_names and dcs_names for updating in command handler
+    let zone_names_for_handler = zone_names.clone();
+    let dcs_names_for_handler = dcs_names.clone();
+
     // Run TUI with async command handler
     tui::run_tui_async(message_buffer, prompt_fn, move |command| {
         let buffer_for_commands = buffer_for_commands.clone();
         let client_clone = client_clone.clone();
         let log_level_for_handler = log_level_for_handler.clone();
         let exit_flag_for_handler = exit_flag_for_handler.clone();
+        let default_zone_for_handler = default_zone_for_handler.clone();
+        let default_dcs_for_handler = default_dcs_for_handler.clone();
+        let zone_names_for_handler = zone_names_for_handler.clone();
+        let dcs_names_for_handler = dcs_names_for_handler.clone();
 
         async move {
             // Echo the command to the output with timestamp
@@ -1827,21 +2108,205 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                 return;
             }
 
-            // Execute other commands through existing handler with buffer output
-            // Lock already released above
+            // Handle default-zone command
+            if command.starts_with("default-zone") {
+                if let Some(ref client) = client_clone {
+                    let client_guard = client.lock().await;
+                    let parts: Vec<&str> = command.split_whitespace().collect();
 
-            let client_ref = if let Some(ref cl) = client_clone {
-                let guard = cl.lock().await;
-                Some(guard)
-            } else {
-                None
+                    if parts.len() == 1 {
+                        // Show current default zone
+                        let mut buffer = buffer_for_commands.lock().unwrap();
+                        buffer.push("".to_string());
+                        if let Ok(dz) = default_zone_for_handler.lock() {
+                            if let Some((ref zone_id, ref name)) = *dz {
+                                buffer.push(format!("  Default zone: {} (ID: {})", name, zone_id));
+                            } else {
+                                buffer.push("  No default zone set.".to_string());
+                                buffer.push("  Usage: default-zone <zone_name>".to_string());
+                                buffer.push("  Use 'zones' to see available zones.".to_string());
+                            }
+                        }
+                        buffer.push("".to_string());
+                    } else {
+                        // Set default zone by name (partial match)
+                        let zone_name = parts[1..].join(" ");
+                        let zones = client_guard.get_zones().await;
+
+                        if let Some(zone) = zones.iter().find(|z| 
+                            z.display_name.to_lowercase().contains(&zone_name.to_lowercase())
+                        ) {
+                            if let Ok(mut dz) = default_zone_for_handler.lock() {
+                                *dz = Some((zone.zone_id.clone(), zone.display_name.clone()));
+                            }
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push("".to_string());
+                            buffer.push(format!("  Default zone set to: {}", zone.display_name));
+                            buffer.push(format!("  Zone ID: {}", zone.zone_id));
+                            buffer.push("".to_string());
+                        } else {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push("".to_string());
+                            buffer.push(format!("  Error: Zone '{}' not found.", zone_name));
+                            buffer.push("  Use 'zones' to see available zones.".to_string());
+                            buffer.push("".to_string());
+                        }
+                    }
+                } else {
+                    let mut buffer = buffer_for_commands.lock().unwrap();
+                    buffer.push("".to_string());
+                    buffer.push("  Error: Roon commands require connection. Remove --upnp-only flag.".to_string());
+                    buffer.push("".to_string());
+                }
+                return;
+            }
+
+            // Handle default-dcs command
+            if command.starts_with("default-dcs") {
+                let parts: Vec<&str> = command.split_whitespace().collect();
+
+                if parts.len() == 1 {
+                    // Show current default dCS device
+                    let mut buffer = buffer_for_commands.lock().unwrap();
+                    buffer.push("".to_string());
+                    if let Ok(dd) = default_dcs_for_handler.lock() {
+                        if let Some((ref host, ref name)) = *dd {
+                            buffer.push(format!("  Default dCS device: {} (Host: {})", name, host));
+                        } else {
+                            buffer.push("  No default dCS device set.".to_string());
+                            buffer.push("  Usage: default-dcs <device_name>".to_string());
+                            buffer.push("  Use 'dcs-list' to see available devices.".to_string());
+                        }
+                    }
+                    buffer.push("".to_string());
+                } else {
+                    // Set default dCS device by name (partial match)
+                    let device_name = parts[1..].join(" ");
+                    let devices = crate::dcs::get_cached_devices();
+
+                    if let Some(device) = devices.iter().find(|d| 
+                        d.hostname.to_lowercase().contains(&device_name.to_lowercase())
+                    ) {
+                        let api_host = device.host();
+                        let display_name = device.hostname.clone();
+                        if let Ok(mut dd) = default_dcs_for_handler.lock() {
+                            *dd = Some((api_host.clone(), display_name.clone()));
+                        }
+                        let mut buffer = buffer_for_commands.lock().unwrap();
+                        buffer.push("".to_string());
+                        buffer.push(format!("  Default dCS device set to: {}", display_name));
+                        buffer.push(format!("  API Host: {}", api_host));
+                        buffer.push("".to_string());
+                    } else {
+                        let mut buffer = buffer_for_commands.lock().unwrap();
+                        buffer.push("".to_string());
+                        buffer.push(format!("  Error: Device '{}' not found.", device_name));
+                        buffer.push("  Use 'dcs-list' to see available devices, or 'dcs-discover' to scan.".to_string());
+                        buffer.push("".to_string());
+                    }
+                }
+                return;
+            }
+
+            // Check if command needs default zone applied or zone name resolved to ID
+            let command = {
+                let parts: Vec<&str> = command.split_whitespace().collect();
+                if parts.len() == 1 && ["play", "pause", "stop", "mute"].contains(&parts[0]) {
+                    // No zone specified - use default
+                    if let Ok(dz) = default_zone_for_handler.lock() {
+                        if let Some((ref zone_id, ref name)) = *dz {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push(format!("  Using default zone: {}", name));
+                            drop(buffer);
+                            format!("{} {}", parts[0], zone_id)
+                        } else {
+                            command.to_string()
+                        }
+                    } else {
+                        command.to_string()
+                    }
+                } else if parts.len() >= 2 && ["play", "pause", "stop", "mute"].contains(&parts[0]) {
+                    // Zone name provided - resolve to zone ID
+                    let zone_name = parts[1..].join(" ");
+                    if let Some(ref cl) = client_clone {
+                        let guard = cl.lock().await;
+                        let zones = guard.get_zones().await;
+                        if let Some(zone) = zones.iter().find(|z| 
+                            z.display_name.to_lowercase() == zone_name.to_lowercase() ||
+                            z.display_name.to_lowercase().contains(&zone_name.to_lowercase())
+                        ) {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push(format!("  Zone: {}", zone.display_name));
+                            drop(buffer);
+                            format!("{} {}", parts[0], zone.zone_id)
+                        } else {
+                            // Not a zone name, pass through as-is (might be a zone ID)
+                            command.to_string()
+                        }
+                    } else {
+                        command.to_string()
+                    }
+                } else {
+                    command.to_string()
+                }
             };
 
-            let result = execute_query_to_buffer(
-                client_ref.as_deref(),
-                command.trim(),
-                buffer_for_commands.clone()
-            ).await;
+            // Check if dCS command needs default device applied
+            let command = {
+                let parts: Vec<&str> = command.split_whitespace().collect();
+                let dcs_commands_needing_host = ["dcs-playing", "dcs-format", "dcs-settings", 
+                    "dcs-upsampler", "dcs-inputs", "dcs-playmode", "dcs-menu"];
+                let dcs_commands_needing_host_plus_arg = ["dcs-set-brightness", "dcs-set-display"];
+                
+                if parts.len() == 1 && dcs_commands_needing_host.contains(&parts[0]) {
+                    // Command with no args - use default
+                    if let Ok(dd) = default_dcs_for_handler.lock() {
+                        if let Some((ref host, ref name)) = *dd {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push(format!("  Using default dCS device: {}", name));
+                            drop(buffer);
+                            format!("{} {}", parts[0], host)
+                        } else {
+                            command
+                        }
+                    } else {
+                        command
+                    }
+                } else if parts.len() == 2 && dcs_commands_needing_host_plus_arg.contains(&parts[0]) {
+                    // Command with just the value arg (e.g., "dcs-set-brightness 3") - use default for host
+                    if let Ok(dd) = default_dcs_for_handler.lock() {
+                        if let Some((ref host, ref name)) = *dd {
+                            let mut buffer = buffer_for_commands.lock().unwrap();
+                            buffer.push(format!("  Using default dCS device: {}", name));
+                            drop(buffer);
+                            format!("{} {} {}", parts[0], host, parts[1])
+                        } else {
+                            command
+                        }
+                    } else {
+                        command
+                    }
+                } else {
+                    command
+                }
+            };
+
+            // Execute other commands through existing handler with buffer output
+            // Use a scoped block to ensure client lock is released before completion updates
+            let result = {
+                let client_ref = if let Some(ref cl) = client_clone {
+                    let guard = cl.lock().await;
+                    Some(guard)
+                } else {
+                    None
+                };
+
+                execute_query_to_buffer(
+                    client_ref.as_deref(),
+                    command.trim(),
+                    buffer_for_commands.clone()
+                ).await
+            }; // client_ref dropped here
 
             // Handle errors
             if let Err(e) = result {
@@ -1850,8 +2315,29 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                 buffer.push(format!("  Error: {}", e));
                 buffer.push("".to_string());
             }
+            
+            // Update zone completions after zones/reconnect commands
+            if command.trim() == "zones" || command.trim() == "reconnect" {
+                if let Some(ref cl) = client_clone {
+                    let guard = cl.lock().await;
+                    let zones = guard.get_zones().await;
+                    let names: Vec<String> = zones.iter().map(|z| z.display_name.clone()).collect();
+                    if let Ok(mut zn) = zone_names_for_handler.lock() {
+                        *zn = names;
+                    }
+                }
+            }
+            
+            // Update dCS completions after dcs-discover
+            if command.trim() == "dcs-discover" {
+                let devices = dcs::get_cached_devices();
+                let names: Vec<String> = devices.iter().map(|d| d.hostname.clone()).collect();
+                if let Ok(mut dn) = dcs_names_for_handler.lock() {
+                    *dn = names;
+                }
+            }
         }
-    }, exit_flag, commands, ws_rx).await?;
+    }, exit_flag, commands, ws_rx, zone_names, dcs_names).await?;
 
     Ok(())
 }
