@@ -2126,7 +2126,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
     // Keep _mdns alive for the lifetime of the server
     let _mdns = register_mdns(port, &local_ip);
     
-    println!("\n=== Roon Remote Display Server v{} ===", env!("CARGO_PKG_VERSION"));
+    println!("\n=== Roon Remote Display Server v{} ({}) ===", env!("CARGO_PKG_VERSION"), env!("BUILD_HASH"));
     println!("Starting server on http://{}", addr);
     println!("\nAccess via:");
     println!("  Local:   http://localhost:{}", port);

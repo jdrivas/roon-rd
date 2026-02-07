@@ -80,6 +80,8 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             .add_filter_ignore_str("hyper")       // Ignore hyper HTTP client debug messages
             .add_filter_ignore_str("roon_api::moo")  // Ignore roon_api ping messages
             .add_filter_ignore_str("tokio_tungstenite")  // Ignore WebSocket polling messages
+            .add_filter_ignore_str("libmdns")  // Ignore libmdns "query type 65 is invalid" warnings
+            .add_filter_ignore_str("mdns_sd")  // Ignore mdns-sd interface send errors
             .set_location_level(LevelFilter::Debug)  // Show file:line for DEBUG level and below
             .build();
 

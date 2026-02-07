@@ -57,3 +57,6 @@ quick-xml = { version = "0.36", features = ["serialize"] }
 regex = "1.10"
 url = "2.5"
 urlencoding = "2.1"
+
+[build-dependencies]
+chrono = "0.4"
