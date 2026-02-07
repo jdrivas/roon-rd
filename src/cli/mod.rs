@@ -99,7 +99,7 @@ impl CompletionData {
 
     /// Update dCS device names from cache
     pub fn update_dcs_devices(&self) {
-        let devices = dcs::get_cached_devices();
+        let devices = dcs::get_cached_devices_sync();
         let names: Vec<String> = devices.iter().map(|d| d.hostname.clone()).collect();
         if let Ok(mut dcs_names) = self.dcs_names.lock() {
             *dcs_names = names;
@@ -857,7 +857,7 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                         out.writeln("  Discovering dCS devices on the network...".to_string());
                         out.writeln("".to_string());
 
-                        match dcs::refresh_device_cache() {
+                        match dcs::refresh_device_cache().await {
                             Ok(devices) => {
                                 if devices.is_empty() {
                                     out.writeln("  No dCS devices found.".to_string());
@@ -888,7 +888,7 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                         // List cached dCS devices (without re-discovering)
                         out.writeln("".to_string());
                         
-                        let devices = dcs::get_cached_devices();
+                        let devices = dcs::get_cached_devices_sync();
                         if devices.is_empty() {
                             out.writeln("  No dCS devices in cache. Run 'dcs-discover' to scan.".to_string());
                         } else {
@@ -1642,7 +1642,7 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                     } else {
                         // Set default dCS device by name (partial match)
                         let device_name = parts[1..].join(" ");
-                        let devices = crate::dcs::get_cached_devices();
+                        let devices = crate::dcs::get_cached_devices_sync();
 
                         if let Some(device) = devices.iter().find(|d| 
                             d.hostname.to_lowercase().contains(&device_name.to_lowercase())
@@ -1962,7 +1962,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
     
     // Initialize dCS device names from cache
     {
-        let devices = dcs::get_cached_devices();
+        let devices = dcs::get_cached_devices_sync();
         let names: Vec<String> = devices.iter().map(|d| d.hostname.clone()).collect();
         if let Ok(mut dn) = dcs_names.lock() {
             *dn = names;
@@ -2182,7 +2182,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                 } else {
                     // Set default dCS device by name (partial match)
                     let device_name = parts[1..].join(" ");
-                    let devices = crate::dcs::get_cached_devices();
+                    let devices = crate::dcs::get_cached_devices_sync();
 
                     if let Some(device) = devices.iter().find(|d| 
                         d.hostname.to_lowercase().contains(&device_name.to_lowercase())
@@ -2330,7 +2330,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
             
             // Update dCS completions after dcs-discover
             if command.trim() == "dcs-discover" {
-                let devices = dcs::get_cached_devices();
+                let devices = dcs::get_cached_devices_sync();
                 let names: Vec<String> = devices.iter().map(|d| d.hostname.clone()).collect();
                 if let Ok(mut dn) = dcs_names_for_handler.lock() {
                     *dn = names;

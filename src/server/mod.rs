@@ -2095,8 +2095,9 @@ const ROUTES: &[(&str, &str, &str)] = &[
 
 /// Start the web server
 pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(), Box<dyn std::error::Error>> {
-    // Pre-initialize dCS device cache (ensures blocking mDNS discovery runs before async zone processing)
-    let _ = crate::dcs::get_cached_devices();
+    // Start background dCS device discovery (non-blocking)
+    // Discovery runs in background and notifies when complete
+    crate::dcs::start_discovery();
 
     let state = AppState {
         roon_client: client,
@@ -2144,6 +2145,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
     println!("\nPress Ctrl+C to stop the server\n");
 
     let listener = tokio::net::TcpListener::bind(&addr).await?;
+    log::info!("Server accepting HTTP connections on {}", addr);
     axum::serve(listener, app).await?;
 
     Ok(())

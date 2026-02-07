@@ -37,23 +37,27 @@ impl DcsDevice {
     }
 }
 
-/// Discover dCS devices on the network using mDNS
+/// Discover dCS devices on the network using mDNS (async)
 /// 
 /// Browses for `_sueS800Device._tcp` services which dCS devices advertise.
 /// Returns a list of discovered devices with their metadata.
-pub fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<dyn Error + Send + Sync>> {
+pub async fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<dyn Error + Send + Sync>> {
     log::info!("Starting dCS device discovery ({}s timeout)", timeout_secs);
 
     let mdns = ServiceDaemon::new()?;
     let receiver = mdns.browse(DCS_SERVICE_TYPE)?;
 
     let mut devices: HashMap<String, DcsDevice> = HashMap::new();
-    let timeout = Duration::from_secs(timeout_secs);
-    let start = std::time::Instant::now();
+    let deadline = tokio::time::Instant::now() + Duration::from_secs(timeout_secs);
 
-    while start.elapsed() < timeout {
-        match receiver.recv_timeout(Duration::from_millis(100)) {
-            Ok(event) => {
+    loop {
+        let remaining = deadline.saturating_duration_since(tokio::time::Instant::now());
+        if remaining.is_zero() {
+            break;
+        }
+
+        match tokio::time::timeout(remaining, receiver.recv_async()).await {
+            Ok(Ok(event)) => {
                 match event {
                     ServiceEvent::ServiceResolved(info) => {
                         log::debug!("Resolved dCS service: {:?}", info);
@@ -118,11 +122,13 @@ pub fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<dyn Err
                     }
                 }
             }
-            Err(flume::RecvTimeoutError::Timeout) => {
-                // Continue waiting
-            }
-            Err(flume::RecvTimeoutError::Disconnected) => {
+            Ok(Err(_)) => {
+                // Channel disconnected
                 log::debug!("mDNS receiver disconnected");
+                break;
+            }
+            Err(_) => {
+                // Timeout reached
                 break;
             }
         }
@@ -137,43 +143,130 @@ pub fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<dyn Err
     Ok(result)
 }
 
-// Global in-memory device cache using std::sync for thread safety
-use std::sync::{Mutex, OnceLock};
+// Global async device cache with notification for when discovery completes
+use std::sync::OnceLock;
+use tokio::sync::{Notify, RwLock};
 
-static DEVICE_CACHE: OnceLock<Mutex<Vec<DcsDevice>>> = OnceLock::new();
+/// Async-compatible device cache that notifies when ready
+struct DcsCache {
+    devices: RwLock<Vec<DcsDevice>>,
+    ready: Notify,
+    initialized: std::sync::atomic::AtomicBool,
+}
 
-/// Get the device cache, initializing with discovery if needed
-fn get_device_cache() -> &'static Mutex<Vec<DcsDevice>> {
-    DEVICE_CACHE.get_or_init(|| {
-        log::info!("Initializing dCS device cache...");
-        let devices = discover_devices(3).unwrap_or_else(|e| {
+impl DcsCache {
+    fn new() -> Self {
+        Self {
+            devices: RwLock::new(Vec::new()),
+            ready: Notify::new(),
+            initialized: std::sync::atomic::AtomicBool::new(false),
+        }
+    }
+    
+    fn is_initialized(&self) -> bool {
+        self.initialized.load(std::sync::atomic::Ordering::Acquire)
+    }
+    
+    fn mark_initialized(&self) {
+        self.initialized.store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+static DEVICE_CACHE: OnceLock<DcsCache> = OnceLock::new();
+
+fn get_cache() -> &'static DcsCache {
+    DEVICE_CACHE.get_or_init(DcsCache::new)
+}
+
+/// Start background dCS device discovery
+/// Call this at server startup - discovery runs async and notifies when complete
+pub fn start_discovery() {
+    let cache = get_cache();
+    
+    // Don't restart if already initialized
+    if cache.is_initialized() {
+        log::debug!("dCS cache already initialized, skipping discovery");
+        return;
+    }
+    
+    log::info!("Starting background dCS device discovery...");
+    
+    // Spawn async discovery task
+    tokio::spawn(async move {
+        let devices = discover_devices(3).await.unwrap_or_else(|e| {
             log::warn!("Failed to discover dCS devices: {}", e);
             Vec::new()
         });
-        log::info!("dCS cache initialized with {} device(s)", devices.len());
-        Mutex::new(devices)
-    })
+        
+        let cache = get_cache();
+        let mut cache_devices = cache.devices.write().await;
+        *cache_devices = devices;
+        let count = cache_devices.len();
+        drop(cache_devices);
+        
+        cache.mark_initialized();
+        cache.ready.notify_waiters();
+        log::info!("dCS cache ready with {} device(s)", count);
+    });
+}
+
+/// Wait for dCS discovery to complete (with timeout)
+/// Returns true if cache is ready, false if timed out
+pub async fn wait_for_discovery(timeout_ms: u64) -> bool {
+    let cache = get_cache();
+    
+    // Already ready?
+    if cache.is_initialized() {
+        return true;
+    }
+    
+    // Wait with timeout
+    match tokio::time::timeout(
+        std::time::Duration::from_millis(timeout_ms),
+        cache.ready.notified()
+    ).await {
+        Ok(_) => true,
+        Err(_) => {
+            log::debug!("dCS discovery wait timed out after {}ms", timeout_ms);
+            cache.is_initialized() // Check one more time
+        }
+    }
 }
 
 /// Refresh the device cache by running discovery again
-pub fn refresh_device_cache() -> Result<Vec<DcsDevice>, Box<dyn std::error::Error + Send + Sync>> {
-    log::info!("Discovering dCS devices...");
-    let devices = discover_devices(3)?;
+pub async fn refresh_device_cache() -> Result<Vec<DcsDevice>, Box<dyn std::error::Error + Send + Sync>> {
+    log::info!("Refreshing dCS devices...");
     
-    if let Ok(mut cache) = get_device_cache().lock() {
-        *cache = devices.clone();
-    }
+    // Run async discovery directly
+    let devices = discover_devices(3).await?;
+    
+    let cache = get_cache();
+    let mut cache_devices = cache.devices.write().await;
+    *cache_devices = devices.clone();
+    cache.mark_initialized();
+    cache.ready.notify_waiters();
+    
     log::info!("dCS cache refreshed with {} device(s)", devices.len());
-    
     Ok(devices)
 }
 
-/// Get cached devices (runs discovery on first call)
-pub fn get_cached_devices() -> Vec<DcsDevice> {
-    get_device_cache()
-        .lock()
-        .map(|cache| cache.clone())
-        .unwrap_or_default()
+/// Get cached devices (non-blocking, returns empty if not yet initialized)
+pub async fn get_cached_devices() -> Vec<DcsDevice> {
+    get_cache().devices.read().await.clone()
+}
+
+/// Get cached devices synchronously (for non-async contexts)
+/// Returns empty vec if cache not ready or lock contention
+pub fn get_cached_devices_sync() -> Vec<DcsDevice> {
+    let cache = get_cache();
+    if !cache.is_initialized() {
+        return Vec::new();
+    }
+    // Try to get devices without blocking
+    match cache.devices.try_read() {
+        Ok(guard) => guard.clone(),
+        Err(_) => Vec::new(),
+    }
 }
 
 /// Find a dCS device that matches a Roon zone name
@@ -181,7 +274,7 @@ pub fn get_cached_devices() -> Vec<DcsDevice> {
 /// Matches zone names like "dCS Vivaldi Upsampler" to devices with unit_type "Vivaldi Upsampler"
 /// or zone names containing "Network Bridge" to devices with that unit type.
 pub fn find_device_for_zone(zone_name: &str) -> Option<DcsDevice> {
-    let devices = get_cached_devices();
+    let devices = get_cached_devices_sync();
     
     log::debug!("find_device_for_zone: looking for zone '{}' in {} cached devices", 
                zone_name, devices.len());
