@@ -1,10 +1,14 @@
 # Roon Remote Display - TODO List
 
--[] add support for handling different dCS devices on the same network E.g. Network Bridge, and Vivaldi. This probably entails mapping IP addresses to names/zones. But given that there seems to be a vivaldi.local address, perhaps we can find something for other devices too.
--[] Add support for setting a roon zone as default, and to using names rather than IDs int he commands that require a zone ID. Similarly for DCS devices.
--[] once the zone id thing is handled then we should also dynamically add auto-complete to zone-names. Similarly for DCS devices.
--[] We might have an issue with TUI version deadlocking or becomming on response when there are command that are waiting for returns.  I wonder if we can unblock there and find a way to coordinate response reporting to the original command. 
-
+-✅ add support for handling different dCS devices on the same network E.g. Network Bridge, and Vivaldi. This probably entails mapping IP addresses to names/zones. But given that there seems to be a vivaldi.local address, perhaps we can find something for other devices too. Is there a discovery mechanism we can use to find the devices on the network?
+-✅ Add support for setting a roon zone as default, and to using names rather than IDs int he commands that require a zone ID. Similarly for DCS devices.
+-✅ once the zone id thing is handled then we should also dynamically add auto-complete to zone-names. Similarly for DCS devices.
+-[] We might have an issue with TUI version deadlocking or becomming on response when there are command that are waiting for returns.  I wonder if we can unblock there and find a way to coordinate response reporting to the original command.  
+-[x] Try to figure out a mechanism that allows us to use some generic local URL to support our accessing the application.
+  - Implemented mDNS responder with custom hostname `roon-rd.local`
+  - Works in Safari and other browsers using native mDNS
+  - Chrome requires disabling "Secure DNS" in `chrome://settings/security`
+  - IP address always works as fallback 
 
 
 ## Future Investigations and Improvements

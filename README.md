@@ -161,10 +161,51 @@ Start the web server with integrated SPA:
 - Built-in Single Page Application (SPA)
 - Automatic album art caching
 - CORS enabled for cross-origin requests
+- mDNS hostname registration (`roon-rd.local`)
+
+### Accessing the Server
+
+When the server starts, it displays all available access URLs:
+
+```
+Access via:
+  Local:   http://localhost:3000
+  Network: http://192.168.1.100:3000
+  mDNS:    http://roon-rd.local:3000
+```
+
+**Access Methods:**
+
+| Method | URL | Best For |
+|--------|-----|----------|
+| Local | `http://localhost:3000` | Same machine |
+| Network IP | `http://192.168.x.x:3000` | Any device (most reliable) |
+| mDNS | `http://roon-rd.local:3000` | Friendly name (Safari, iOS) |
+
+**Browser Compatibility for mDNS (`roon-rd.local`):**
+
+| Browser | Works? | Notes |
+|---------|--------|-------|
+| Safari | ✅ Yes | Works out of the box |
+| Firefox | ✅ Yes | Uses native mDNS |
+| iOS Safari | ✅ Yes | Works on iPhones/iPads |
+| Chrome | ⚠️ Requires config | See below |
+| Edge | ⚠️ Requires config | Same as Chrome |
+
+**Enabling mDNS in Chrome/Edge:**
+
+Chrome's "Secure DNS" feature bypasses mDNS resolution. To use `roon-rd.local`:
+
+1. Open `chrome://settings/security` (or `edge://settings/privacy`)
+2. Scroll to "Use secure DNS"
+3. Turn it **off**, or select "With your current service provider"
+4. Reload `http://roon-rd.local:3000`
+
+**Tip:** The IP address always works regardless of browser settings.
 
 ### Single Page Application (SPA)
 
-The server includes a modern web-based interface accessible at `http://localhost:3000`:
+The server includes a modern web-based interface:
 
 **SPA Features:**
 - **Real-time Display**: Live playback information with automatic updates

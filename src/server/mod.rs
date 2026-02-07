@@ -12,6 +12,58 @@ use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
 use crate::roon::RoonClient;
 use futures_util::StreamExt;
+use std::net::IpAddr;
+
+/// mDNS responder handle - keeps the service registered while alive
+struct MdnsHandle {
+    _responder: libmdns::Responder,
+    _service: libmdns::Service,
+}
+
+/// Register mDNS service with custom hostname "roon-rd" so roon-rd.local resolves to this machine
+fn register_mdns(port: u16, local_ip: &str) -> Option<MdnsHandle> {
+    // Parse the local IP to filter mDNS responses to just this IP
+    let ip_list: Vec<IpAddr> = local_ip.parse().ok().into_iter().collect();
+    
+    // Create responder with custom hostname "roon-rd" (will become roon-rd.local)
+    // Use spawn_with_ip_list_and_hostname to specify our custom hostname
+    let rt = tokio::runtime::Handle::current();
+    match libmdns::Responder::spawn_with_ip_list_and_hostname(&rt, ip_list, "roon-rd".to_string()) {
+        Ok(responder) => {
+            // Register HTTP service - this also advertises the A record for the hostname
+            let service = responder.register(
+                "_http._tcp",
+                "Roon Remote Display",
+                port,
+                &["path=/"],
+            );
+            log::info!("Registered mDNS: roon-rd.local:{}", port);
+            Some(MdnsHandle {
+                _responder: responder,
+                _service: service,
+            })
+        }
+        Err(e) => {
+            log::warn!("Failed to create mDNS responder: {}", e);
+            None
+        }
+    }
+}
+
+/// Get the local IP address of this machine
+fn get_local_ip() -> String {
+    use std::net::UdpSocket;
+
+    if let Ok(socket) = UdpSocket::bind("0.0.0.0:0") {
+        if let Ok(()) = socket.connect("8.8.8.8:80") {
+            if let Ok(addr) = socket.local_addr() {
+                return addr.ip().to_string();
+            }
+        }
+    }
+    "127.0.0.1".to_string()
+}
+
 
 #[derive(Clone)]
 pub struct AppState {
@@ -2068,9 +2120,20 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16) -> Result<(
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
+    let local_ip = get_local_ip();
+    
+    // Register mDNS so roon-rd.local resolves to this machine
+    // Keep _mdns alive for the lifetime of the server
+    let _mdns = register_mdns(port, &local_ip);
+    
     println!("\n=== Roon Remote Display Server v{} ===", env!("CARGO_PKG_VERSION"));
     println!("Starting server on http://{}", addr);
-    println!("\nOpen http://localhost:{} in your browser", port);
+    println!("\nAccess via:");
+    println!("  Local:   http://localhost:{}", port);
+    println!("  Network: http://{}:{}", local_ip, port);
+    if _mdns.is_some() {
+        println!("  mDNS:    http://roon-rd.local:{}", port);
+    }
     println!("\nAPI endpoints:");
 
     // Print routes from the documentation array
