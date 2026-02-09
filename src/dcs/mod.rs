@@ -2,7 +2,22 @@ use serde::{Deserialize, Serialize};
 use std::error::Error;
 use std::collections::HashMap;
 use std::time::Duration;
+use std::sync::OnceLock;
 use mdns_sd::{ServiceDaemon, ServiceEvent};
+
+/// Shared HTTP client for dCS API requests (avoids creating a new client per request)
+static DCS_HTTP_CLIENT: OnceLock<reqwest::Client> = OnceLock::new();
+
+fn get_http_client() -> &'static reqwest::Client {
+    DCS_HTTP_CLIENT.get_or_init(|| {
+        reqwest::Client::builder()
+            .timeout(Duration::from_secs(10))
+            .pool_idle_timeout(Duration::from_secs(30))
+            .pool_max_idle_per_host(2)
+            .build()
+            .expect("Failed to create HTTP client")
+    })
+}
 
 /// mDNS service type for dCS devices (StreamUnlimited Engine)
 const DCS_SERVICE_TYPE: &str = "_sueS800Device._tcp.local.";
@@ -144,7 +159,6 @@ pub async fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<d
 }
 
 // Global async device cache with notification for when discovery completes
-use std::sync::OnceLock;
 use tokio::sync::{Notify, RwLock};
 
 /// Async-compatible device cache that notifies when ready
@@ -373,7 +387,7 @@ struct DcsValueResponse {
 pub async fn get_audio_format(host: &str) -> Result<DcsAudioFormat, Box<dyn Error>> {
     log::info!("Fetching audio format from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Query bit depth
     let bit_depth_url = api_url(host, "getData", "dcsworker:/dcs/currentBitDepth", "value");
@@ -406,7 +420,7 @@ pub async fn get_audio_format(host: &str) -> Result<DcsAudioFormat, Box<dyn Erro
 pub async fn get_playback_info(host: &str) -> Result<DcsPlaybackInfo, Box<dyn Error>> {
     log::info!("Fetching playback info from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
     let url = api_url(host, "getData", "/player/data", "title,value");
 
     let response = client.get(&url).send().await?;
@@ -478,7 +492,7 @@ pub async fn get_playback_info(host: &str) -> Result<DcsPlaybackInfo, Box<dyn Er
 pub async fn get_device_settings(host: &str) -> Result<DcsDeviceSettings, Box<dyn Error>> {
     log::info!("Fetching device settings from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Query display brightness
     let brightness_url = api_url(host, "getData", "dcsworker:/dcs/unitSettings/displayBrightness", "value");
@@ -548,7 +562,7 @@ pub struct DcsMenu {
 pub async fn get_upsampler_settings(host: &str) -> Result<DcsUpsamplerSettings, Box<dyn Error>> {
     log::info!("Fetching upsampler settings from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Query output sample rate
     let output_rate_url = api_url(host, "getData", "dcsworker:/dcs/settings/outputSampleRate", "value");
@@ -575,7 +589,7 @@ pub async fn get_upsampler_settings(host: &str) -> Result<DcsUpsamplerSettings, 
 pub async fn get_playback_position(host: &str) -> Result<i64, Box<dyn Error>> {
     log::info!("Fetching playback position from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
     let url = api_url(host, "getData", "/player/data/playTime", "value,path");
 
     let response: Vec<DcsValueResponse> = client.get(&url).send().await?.json().await?;
@@ -595,7 +609,7 @@ pub async fn get_playback_position(host: &str) -> Result<i64, Box<dyn Error>> {
 pub async fn get_input_info(host: &str) -> Result<DcsInputInfo, Box<dyn Error>> {
     log::info!("Fetching input info from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Get current input
     let current_url = api_url(host, "getData", "dcsUiMenu:/ui/currentDigital", "title,value");
@@ -641,7 +655,7 @@ pub async fn get_input_info(host: &str) -> Result<DcsInputInfo, Box<dyn Error>> 
 pub async fn get_play_mode(host: &str) -> Result<DcsPlayMode, Box<dyn Error>> {
     log::info!("Fetching play mode from dCS device: {}", host);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
     let url = api_url(host, "getData", "settings:/mediaPlayer/playMode", "value");
 
     let response = client.get(&url).send().await?;
@@ -664,7 +678,7 @@ pub async fn get_play_mode(host: &str) -> Result<DcsPlayMode, Box<dyn Error>> {
 pub async fn get_menu(host: &str, path: &str) -> Result<DcsMenu, Box<dyn Error>> {
     log::info!("Fetching menu from dCS device: {} -> {}", host, path);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Build getRows URL
     let url = format!(
@@ -744,7 +758,7 @@ pub async fn set_display_brightness(host: &str, brightness: i32) -> Result<(), B
         return Err("Brightness must be between 0 and 15".into());
     }
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Build setData URL with JSON value
     let value_json = format!("{{\"type\":\"i32_\",\"i32_\":{}}}", brightness);
@@ -772,7 +786,7 @@ pub async fn set_display_brightness(host: &str, brightness: i32) -> Result<(), B
 pub async fn set_display_off(host: &str, off: bool) -> Result<(), Box<dyn Error>> {
     log::info!("Setting display off on dCS device: {} -> {}", host, off);
 
-    let client = reqwest::Client::new();
+    let client = get_http_client();
 
     // Build setData URL with JSON value
     let value_json = format!("{{\"type\":\"bool_\",\"bool_\":{}}}", off);

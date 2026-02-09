@@ -7,6 +7,8 @@ use axum::{
     http::{StatusCode, header},
 };
 use tower_http::cors::CorsLayer;
+use tower_http::timeout::TimeoutLayer;
+use std::time::Duration;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use serde::{Deserialize, Serialize};
@@ -2164,6 +2166,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_in
         .route("/mute/:zone_id", post(mute_handler))
         .route("/play-from-queue/:zone_id", post(play_from_queue_handler))
         .layer(CorsLayer::permissive())
+        .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .with_state(state);
 
     let addr = format!("0.0.0.0:{}", port);
