@@ -15,3 +15,6 @@ roon-rd-config.json
 *.swp
 *.swo
 *~
+
+# Log files
+*.log
