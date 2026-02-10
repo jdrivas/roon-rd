@@ -1329,8 +1329,12 @@ impl App {
                         Span::styled("            Show all commands", Style::default().fg(Color::Black)),
                     ]),
                     Line::from(vec![
-                        Span::styled("verbose", Style::default().fg(Color::DarkGray)),
-                        Span::styled("         Toggle verbose logging", Style::default().fg(Color::Black)),
+                        Span::styled("log-level", Style::default().fg(Color::DarkGray)),
+                        Span::styled("       Show current log level", Style::default().fg(Color::Black)),
+                    ]),
+                    Line::from(vec![
+                        Span::styled("set-log-level", Style::default().fg(Color::DarkGray)),
+                        Span::styled("   Set log level (trace|debug|info|warn|error|off)", Style::default().fg(Color::Black)),
                     ]),
                     Line::from(""),
                     Line::from(Span::styled("Queue & Playback", Style::default().fg(Color::Blue))),

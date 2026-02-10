@@ -9,7 +9,8 @@
   - Works in Safari and other browsers using native mDNS
   - Chrome requires disabling "Secure DNS" in `chrome://settings/security`
   - IP address always works as fallback 
-
+-[x] Change handling what log level to display. All the usage modes (server, TUI, Interactive, command line) should have the same command line argument: log-level: (trace, debug, info, warn, error). and when set display up to that. In addition, in the TUI/interactive mode the command should be changed from verbose, to log-level with the same arguments as with the command line.
+- [] It would be nice to be able to have interactive/TUI commands from within a running server when a command line arugment to the server is provided. e.g. roon-rd server --interactive or --tui. This needs some thought and would imply redirection of log messages, but it would be nice to be able to start the server and then interact with it. Perhaps an alternative would be able to point the TUI/interactive mode to a running server instance.
 
 ## Future Investigations and Improvements
 

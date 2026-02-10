@@ -5,11 +5,43 @@ mod upnp;
 mod dcs;
 mod tui;
 
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use simplelog::*;
+use time::macros::format_description;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use roon::RoonClient;
+
+/// Log level options for CLI
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
+pub enum LogLevel {
+    Trace,
+    Debug,
+    Info,
+    Warn,
+    Error,
+    Off,
+}
+
+impl LogLevel {
+    pub fn to_level_filter(self) -> LevelFilter {
+        match self {
+            LogLevel::Trace => LevelFilter::Trace,
+            LogLevel::Debug => LevelFilter::Debug,
+            LogLevel::Info => LevelFilter::Info,
+            LogLevel::Warn => LevelFilter::Warn,
+            LogLevel::Error => LevelFilter::Error,
+            LogLevel::Off => LevelFilter::Off,
+        }
+    }
+}
+
+/// Time format options for log timestamps
+#[derive(Debug, Clone, Copy, ValueEnum, PartialEq)]
+pub enum TimeFormat {
+    Local,
+    Utc,
+}
 
 #[derive(Parser)]
 #[command(name = "roon-rd")]
@@ -19,9 +51,13 @@ struct Cli {
     #[command(subcommand)]
     command: Commands,
 
-    /// Enable verbose logging
-    #[arg(short, long, global = true)]
-    verbose: bool,
+    /// Set log level (trace, debug, info, warn, error, off)
+    #[arg(long, global = true, value_enum, default_value = "off")]
+    log_level: LogLevel,
+
+    /// Set log timestamp format (local, utc)
+    #[arg(long, global = true, value_enum, default_value = "local")]
+    log_time: TimeFormat,
 
     /// UPnP-only mode (don't connect to Roon)
     #[arg(long, global = true)]
@@ -55,7 +91,7 @@ enum Commands {
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
 
-    // Determine log level based on mode and verbose flag
+    // Determine log level based on mode and --log-level flag
     let log_level = match &cli.command {
         Commands::Query { .. } | Commands::Interactive => {
             // CLI/Interactive mode: Always initialize at Trace level to allow dynamic control
@@ -67,26 +103,40 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             LevelFilter::Off
         }
         Commands::Server { .. } => {
-            // Server mode: info by default, debug if verbose
-            if cli.verbose {
-                LevelFilter::Debug
-            } else {
+            // Server mode: use specified log level, default to info if off
+            let level = cli.log_level.to_level_filter();
+            if level == LevelFilter::Off {
                 LevelFilter::Info
+            } else {
+                level
             }
         }
     };
 
     if log_level != LevelFilter::Off {
         // Configure logging to filter out noisy dependencies and show file:line for DEBUG
-        let config = ConfigBuilder::new()
+        let mut config_builder = ConfigBuilder::new();
+        config_builder
             .add_filter_ignore_str("rustyline")  // Ignore rustyline debug messages
             .add_filter_ignore_str("hyper")       // Ignore hyper HTTP client debug messages
             .add_filter_ignore_str("roon_api::moo")  // Ignore roon_api ping messages
             .add_filter_ignore_str("tokio_tungstenite")  // Ignore WebSocket polling messages
             .add_filter_ignore_str("libmdns")  // Ignore libmdns "query type 65 is invalid" warnings
             .add_filter_ignore_str("mdns_sd")  // Ignore mdns-sd interface send errors
-            .set_location_level(LevelFilter::Debug)  // Show file:line for DEBUG level and below
-            .build();
+            .set_location_level(LevelFilter::Debug);  // Show file:line for DEBUG level and below
+
+        // Set custom time format with timezone indicator
+        // Format: 2024-01-15 14:30:45 PST or 2024-01-15 14:30:45 UTC
+        let time_format = format_description!("[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]");
+        config_builder.set_time_format_custom(time_format);
+
+        // Set time offset based on --log-time flag
+        // Default is UTC; set_time_offset_to_local() attempts to use local time
+        if cli.log_time == TimeFormat::Local {
+            let _ = config_builder.set_time_offset_to_local();
+        }
+
+        let config = config_builder.build();
 
         CombinedLogger::init(vec![
             TermLogger::new(
@@ -113,7 +163,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Query { args } => {
             let query_string = args.join(" ");
-            cli::handle_query(client, &query_string, cli.verbose).await?;
+            cli::handle_query(client, &query_string, cli.log_level.to_level_filter()).await?;
         }
         Commands::Server { port, carousel_interval } => {
             if let Some(client) = client {
@@ -123,10 +173,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Interactive => {
-            cli::handle_interactive(client, cli.verbose).await?;
+            cli::handle_interactive(client, cli.log_level.to_level_filter(), cli.log_time == TimeFormat::Local).await?;
         }
         Commands::Tui => {
-            cli::handle_tui(client, cli.verbose).await?;
+            cli::handle_tui(client, cli.log_level.to_level_filter(), cli.log_time == TimeFormat::Local).await?;
         }
     }
 

@@ -34,7 +34,8 @@ pub fn get_command_definitions() -> Vec<CommandInfo> {
         CommandInfo { name: "help", description: "Show available commands", usage: None },
         CommandInfo { name: "quit", description: "Exit interactive mode", usage: None },
         CommandInfo { name: "exit", description: "Exit interactive mode", usage: None },
-        CommandInfo { name: "verbose", description: "Toggle verbose logging or set level", usage: Some("[off|error|warn|info|debug|trace]") },
+        CommandInfo { name: "log-level", description: "Show current log level", usage: None },
+        CommandInfo { name: "set-log-level", description: "Set log level", usage: Some("<trace|debug|info|warn|error|off>") },
         CommandInfo { name: "version", description: "Show version information", usage: None },
 
         // Roon commands
@@ -283,7 +284,7 @@ impl OutputDest {
 }
 
 /// Execute a query command against the Roon client (or UPnP-only commands)
-async fn execute_query(client: Option<&RoonClient>, query_type: &str, _verbose: bool) -> Result<(), String> {
+async fn execute_query(client: Option<&RoonClient>, query_type: &str) -> Result<(), String> {
     execute_query_with_dest(client, query_type, OutputDest::Stdout).await
 }
 
@@ -561,8 +562,8 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
                 Err(e) => Err(format!("Discovery failed: {}", e))
             }
         }
-        "verbose" => {
-            // This is handled in interactive mode, not here
+        "log-level" | "set-log-level" => {
+            // These are handled in interactive mode, not here
             Ok(())
         }
         "version" => {
@@ -579,7 +580,7 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
             out.writeln("".to_string());
 
             // Group commands by category
-            let general_cmds = ["help", "quit", "exit", "verbose", "version"];
+            let general_cmds = ["help", "quit", "exit", "log-level", "set-log-level", "version"];
             let roon_cmds = ["status", "reconnect", "zones", "default-zone", "now-playing", "queue", "play", "pause", "stop", "mute"];
             let upnp_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("upnp-")).collect();
             let dcs_cmds: Vec<_> = definitions.iter().filter(|c| c.name.starts_with("dcs-") || c.name == "default-dcs").collect();
@@ -1336,7 +1337,7 @@ async fn execute_query_with_dest(client: Option<&RoonClient>, query_type: &str, 
 }
 
 /// Handle CLI query commands
-pub async fn handle_query(client: Option<Arc<Mutex<RoonClient>>>, query_type: &str, verbose: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_query(client: Option<Arc<Mutex<RoonClient>>>, query_type: &str, _log_level: LevelFilter) -> Result<(), Box<dyn std::error::Error>> {
     // Wait for authorization if we have a client
     if let Some(ref client) = client {
         let client = client.lock().await;
@@ -1349,23 +1350,17 @@ pub async fn handle_query(client: Option<Arc<Mutex<RoonClient>>>, query_type: &s
     // Execute query with optional client reference
     if let Some(client) = client {
         let client = client.lock().await;
-        execute_query(Some(&client), query_type, verbose).await.map_err(|e| e.into())
+        execute_query(Some(&client), query_type).await.map_err(|e| e.into())
     } else {
-        execute_query(None, query_type, verbose).await.map_err(|e| e.into())
+        execute_query(None, query_type).await.map_err(|e| e.into())
     }
 }
 
 /// Handle interactive mode - read commands from stdin with history support
-pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bool) -> Result<(), Box<dyn std::error::Error>> {
-    // Initialize verbose state and track current log level
+pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, initial_log_level: LevelFilter, _use_local_time: bool) -> Result<(), Box<dyn std::error::Error>> {
+    // Initialize log level state
     // The logger was initialized at Trace level in main.rs to allow full dynamic control
-    // Set initial log level based on -v flag: Info if -v was passed, Off otherwise
-    let mut verbose = verbose_flag;
-    let mut current_log_level = if verbose_flag {
-        LevelFilter::Info
-    } else {
-        LevelFilter::Off
-    };
+    let mut current_log_level = initial_log_level;
     log::set_max_level(current_log_level);
 
     // Default zone for playback commands (zone_id, display_name)
@@ -1374,17 +1369,25 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
     // Default dCS device for dCS commands (api_host, display_name)
     let mut default_dcs: Option<(String, String)> = None;
 
+    // Helper to format log level for display
+    fn format_log_level(level: LevelFilter) -> String {
+        match level {
+            LevelFilter::Off => "off".to_string(),
+            LevelFilter::Error => "error".to_string(),
+            LevelFilter::Warn => "warn".to_string(),
+            LevelFilter::Info => "info".to_string(),
+            LevelFilter::Debug => "debug".to_string(),
+            LevelFilter::Trace => "trace".to_string(),
+        }
+    }
+
     println!();
     if client.is_some() {
         println!("Roon Remote Display - Interactive Mode");
         println!("Type 'help' for available commands, 'quit' to exit.");
         println!("Use arrow keys or Ctrl-P/Ctrl-N to navigate command history.");
         println!("Press Tab for command completion.");
-        if verbose {
-            println!("Logging: {} (use '{}' command to change level)", "info".bold().green(), "verbose".cyan());
-        } else {
-            println!("Logging: {} (use '{}' command to enable)", "off".bold(), "verbose".cyan());
-        }
+        println!("Log level: {} (use '{}' to change)", format_log_level(current_log_level).bold().cyan(), "set-log-level".cyan());
         println!();
         println!("Please enable the extension in Roon Settings > Extensions.");
         println!();
@@ -1393,11 +1396,7 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
         println!("Type 'help' for available commands, 'quit' to exit.");
         println!("Use arrow keys or Ctrl-P/Ctrl-N to navigate command history.");
         println!("Press Tab for command completion.");
-        if verbose {
-            println!("Logging: {} (use '{}' command to change level)", "info".bold().green(), "verbose".cyan());
-        } else {
-            println!("Logging: {} (use '{}' command to enable)", "off".bold(), "verbose".cyan());
-        }
+        println!("Log level: {} (use '{}' to change)", format_log_level(current_log_level).bold().cyan(), "set-log-level".cyan());
         println!();
         println!("Note: Roon commands are disabled (--upnp-only mode)");
         println!();
@@ -1481,55 +1480,30 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                     break;
                 }
 
-                // Check for verbose command with optional level argument
-                if command.starts_with("verbose") {
+                // Check for log-level command (display current level)
+                if command == "log-level" {
+                    println!();
+                    println!("  Current log level: {}", format_log_level(current_log_level).bold().cyan());
+                    println!();
+                    continue;
+                }
+
+                // Check for set-log-level command
+                if command.starts_with("set-log-level") {
                     let parts: Vec<&str> = command.split_whitespace().collect();
 
-                    if parts.len() == 1 {
-                        // Toggle behavior when no argument provided
-                        verbose = !verbose;
-                        println!();
-                        if verbose {
-                            println!("  {} logging {}", "Verbose".bold().green(), "enabled".bold().green());
-                            current_log_level = LevelFilter::Info;
-                            log::set_max_level(current_log_level);
-                        } else {
-                            println!("  {} logging {}", "Verbose".bold(), "disabled".bold());
-                            current_log_level = LevelFilter::Off;
-                            log::set_max_level(current_log_level);
-                        }
-                        println!();
-                    } else if parts.len() == 2 {
-                        // Set specific log level
+                    if parts.len() == 2 {
                         let level_str = parts[1].to_lowercase();
                         let new_level = match level_str.as_str() {
-                            "off" => {
-                                verbose = false;
-                                LevelFilter::Off
-                            },
-                            "error" => {
-                                verbose = true;
-                                LevelFilter::Error
-                            },
-                            "warn" => {
-                                verbose = true;
-                                LevelFilter::Warn
-                            },
-                            "info" => {
-                                verbose = true;
-                                LevelFilter::Info
-                            },
-                            "debug" => {
-                                verbose = true;
-                                LevelFilter::Debug
-                            },
-                            "trace" => {
-                                verbose = true;
-                                LevelFilter::Trace
-                            },
+                            "off" => LevelFilter::Off,
+                            "error" => LevelFilter::Error,
+                            "warn" => LevelFilter::Warn,
+                            "info" => LevelFilter::Info,
+                            "debug" => LevelFilter::Debug,
+                            "trace" => LevelFilter::Trace,
                             _ => {
                                 println!();
-                                println!("  {} Invalid log level. Use: off, error, warn, info, debug, trace", "Error:".bold().red());
+                                println!("  {} Invalid log level. Use: trace, debug, info, warn, error, off", "Error:".bold().red());
                                 println!();
                                 continue;
                             }
@@ -1538,15 +1512,11 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                         current_log_level = new_level;
                         log::set_max_level(current_log_level);
                         println!();
-                        if verbose {
-                            println!("  {} logging set to {}", "Verbose".bold().green(), level_str.bold().green());
-                        } else {
-                            println!("  {} logging {}", "Verbose".bold(), "disabled".bold());
-                        }
+                        println!("  Log level set to: {}", format_log_level(current_log_level).bold().cyan());
                         println!();
                     } else {
                         println!();
-                        println!("  {} Usage: verbose [off|error|warn|info|debug|trace]", "Error:".bold().red());
+                        println!("  {} Usage: set-log-level <trace|debug|info|warn|error|off>", "Error:".bold().red());
                         println!();
                     }
                     continue;
@@ -1710,7 +1680,7 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                 // Execute the command
                 if let Some(ref client) = client {
                     let client = client.lock().await;
-                    if let Err(e) = execute_query(Some(&client), &command, verbose).await {
+                    if let Err(e) = execute_query(Some(&client), &command).await {
                         println!("  Error: {}", e);
                         println!();
                     }
@@ -1722,7 +1692,7 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
                         completion_data.update_zones(zone_names);
                     }
                 } else {
-                    if let Err(e) = execute_query(None, &command, verbose).await {
+                    if let Err(e) = execute_query(None, &command).await {
                         println!("  Error: {}", e);
                         println!();
                     }
@@ -1757,7 +1727,7 @@ pub async fn handle_interactive(client: Option<Arc<Mutex<RoonClient>>>, verbose_
 }
 
 /// Handle TUI mode - interactive mode with fixed prompt and scrolling output
-pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bool) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, initial_log_level: LevelFilter, use_local_time: bool) -> Result<(), Box<dyn std::error::Error>> {
     use std::sync::Mutex as StdMutex;
     use crate::tui;
 
@@ -1771,19 +1741,26 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
     let default_dcs: Arc<StdMutex<Option<(String, String)>>> = Arc::new(StdMutex::new(None));
 
     // Set up TUI logger with shared mutable log level
-    let current_log_level = Arc::new(StdMutex::new(if verbose_flag {
-        LevelFilter::Info
-    } else {
-        LevelFilter::Off
-    }));
+    let current_log_level = Arc::new(StdMutex::new(initial_log_level));
 
     // Configure logging to filter out noisy dependencies
-    let log_config = simplelog::ConfigBuilder::new()
+    let mut log_config_builder = simplelog::ConfigBuilder::new();
+    log_config_builder
         .add_filter_ignore_str("rustyline")
         .add_filter_ignore_str("hyper")
         .add_filter_ignore_str("roon_api::moo")
-        .add_filter_ignore_str("tokio_tungstenite")
-        .build();
+        .add_filter_ignore_str("tokio_tungstenite");
+    
+    // Set custom time format with timezone indicator
+    let time_format = time::macros::format_description!("[year]-[month]-[day] [hour]:[minute]:[second] [offset_hour sign:mandatory][offset_minute]");
+    log_config_builder.set_time_format_custom(time_format);
+
+    // Set time format based on use_local_time flag
+    if use_local_time {
+        let _ = log_config_builder.set_time_offset_to_local();
+    }
+    
+    let log_config = log_config_builder.build();
 
     // Initialize TUI logger
     let tui_logger = tui::TuiLogger::new(message_buffer.clone(), current_log_level.clone(), log_config);
@@ -1802,11 +1779,15 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
             buffer.push("UPnP-only mode - Roon commands disabled".to_string());
         }
 
-        if verbose_flag {
-            buffer.push(format!("Logging: {} (use '{}' command to change level)", "info".to_string(), "verbose"));
-        } else {
-            buffer.push(format!("Logging: {} (use '{}' command to enable)", "off".to_string(), "verbose"));
-        }
+        let level_str = match initial_log_level {
+            LevelFilter::Off => "off",
+            LevelFilter::Error => "error",
+            LevelFilter::Warn => "warn",
+            LevelFilter::Info => "info",
+            LevelFilter::Debug => "debug",
+            LevelFilter::Trace => "trace",
+        };
+        buffer.push(format!("Log level: {} (use '{}' to change)", level_str, "set-log-level"));
         buffer.push("".to_string());
     }
 
@@ -1996,30 +1977,30 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
             // Yield to allow TUI to render the command echo before executing
             tokio::task::yield_now().await;
 
-            // Handle verbose command first (since it's synchronous)
-            if command.starts_with("verbose") {
+            // Handle log-level command (display current level)
+            if command.trim() == "log-level" {
+                let mut buffer = buffer_for_commands.lock().unwrap();
+                let level = log_level_for_handler.lock().unwrap();
+                let level_str = match *level {
+                    LevelFilter::Off => "off",
+                    LevelFilter::Error => "error",
+                    LevelFilter::Warn => "warn",
+                    LevelFilter::Info => "info",
+                    LevelFilter::Debug => "debug",
+                    LevelFilter::Trace => "trace",
+                };
+                buffer.push("".to_string());
+                buffer.push(format!("  Current log level: {}", level_str));
+                buffer.push("".to_string());
+                return;
+            }
+
+            // Handle set-log-level command
+            if command.starts_with("set-log-level") {
                 let mut buffer = buffer_for_commands.lock().unwrap();
                 let parts: Vec<&str> = command.split_whitespace().collect();
 
-                if parts.len() == 1 {
-                    // Toggle behavior
-                    let mut level = log_level_for_handler.lock().unwrap();
-                    let new_level = if *level == LevelFilter::Off {
-                        LevelFilter::Info
-                    } else {
-                        LevelFilter::Off
-                    };
-                    *level = new_level;
-                    log::set_max_level(new_level);
-
-                    buffer.push("".to_string());
-                    if new_level != LevelFilter::Off {
-                        buffer.push(format!("  Verbose logging enabled ({})", format!("{:?}", new_level).to_lowercase()));
-                    } else {
-                        buffer.push("  Verbose logging disabled".to_string());
-                    }
-                    buffer.push("".to_string());
-                } else if parts.len() == 2 {
+                if parts.len() == 2 {
                     let level_str = parts[1].to_lowercase();
                     let new_level = match level_str.as_str() {
                         "off" => LevelFilter::Off,
@@ -2030,7 +2011,7 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                         "trace" => LevelFilter::Trace,
                         _ => {
                             buffer.push("".to_string());
-                            buffer.push("  Error: Invalid log level. Use: off, error, warn, info, debug, trace".to_string());
+                            buffer.push("  Error: Invalid log level. Use: trace, debug, info, warn, error, off".to_string());
                             buffer.push("".to_string());
                             return;
                         }
@@ -2040,7 +2021,11 @@ pub async fn handle_tui(client: Option<Arc<Mutex<RoonClient>>>, verbose_flag: bo
                     *level = new_level;
                     log::set_max_level(new_level);
                     buffer.push("".to_string());
-                    buffer.push(format!("  Verbose logging set to {}", level_str));
+                    buffer.push(format!("  Log level set to: {}", level_str));
+                    buffer.push("".to_string());
+                } else {
+                    buffer.push("".to_string());
+                    buffer.push("  Usage: set-log-level <trace|debug|info|warn|error|off>".to_string());
                     buffer.push("".to_string());
                 }
                 return;
