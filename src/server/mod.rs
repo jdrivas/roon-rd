@@ -369,7 +369,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             font-size: 0.8rem;
             color: #777;
         }
-        .current-time, .total-time {
+        .current-time {
             font-family: 'Courier New', Courier, monospace;
         }
         .queue-info {
@@ -1069,7 +1069,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                                         </div>
                                         <div class="progress-time">
                                             <span class="current-time">${formatTime(zone.position_seconds)}</span>
-                                            <span class="total-time" onclick="toggleTimeDisplay('${zone.zone_id}')" style="cursor: pointer;" title="Click to toggle between total time and time remaining">${formatTime(zone.length_seconds)}</span>
+                                            <span class="total-time" onclick="toggleTimeDisplay('${zone.zone_id}')" style="cursor: pointer;" title="Click to toggle between total time and time remaining"><span class="queue-time-value">${formatTime(zone.length_seconds)}</span></span>
                                         </div>
                                         <div class="queue-info">
                                             ${zone.queue_items_remaining > 1 ? `<span class="queue-count">${zone.queue_items_remaining - 1} track${zone.queue_items_remaining !== 2 ? 's' : ''} in the queue</span>` : ''}
@@ -1199,9 +1199,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     const showRemaining = timeDisplayMode[zone.zone_id] || false;
                     if (showRemaining) {
                         const remaining = zone.length_seconds - (zone.position_seconds || 0);
-                        progressTimes[1].textContent = formatTime(remaining) + ' remaining';
+                        progressTimes[1].innerHTML = `<span class="queue-time-value">${formatTime(remaining)}</span> remaining`;
                     } else {
-                        progressTimes[1].textContent = formatTime(zone.length_seconds);
+                        progressTimes[1].innerHTML = `<span class="queue-time-value">${formatTime(zone.length_seconds)}</span>`;
                     }
                 }
 
@@ -1606,9 +1606,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const showRemaining = timeDisplayMode[zoneId] || false;
                 if (showRemaining) {
                     const remaining = length - position;
-                    totalTime.textContent = formatTime(remaining) + ' remaining';
+                    totalTime.innerHTML = `<span class="queue-time-value">${formatTime(remaining)}</span> remaining`;
                 } else {
-                    totalTime.textContent = formatTime(length);
+                    totalTime.innerHTML = `<span class="queue-time-value">${formatTime(length)}</span>`;
                 }
             }
 
@@ -1708,10 +1708,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             if (showRemaining) {
                 // Show time remaining
                 const remaining = zoneData.length_seconds - (zoneData.position_seconds || 0);
-                totalTime.textContent = formatTime(remaining) + ' remaining';
+                totalTime.innerHTML = `<span class="queue-time-value">${formatTime(remaining)}</span> remaining`;
             } else {
                 // Show total time
-                totalTime.textContent = formatTime(zoneData.length_seconds);
+                totalTime.innerHTML = `<span class="queue-time-value">${formatTime(zoneData.length_seconds)}</span>`;
             }
         }
 

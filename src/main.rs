@@ -52,8 +52,8 @@ struct Cli {
     command: Commands,
 
     /// Set log level (trace, debug, info, warn, error, off)
-    #[arg(long, global = true, value_enum, default_value = "off")]
-    log_level: LogLevel,
+    #[arg(long, global = true, value_enum)]
+    log_level: Option<LogLevel>,
 
     /// Set log timestamp format (local, utc)
     #[arg(long, global = true, value_enum, default_value = "local")]
@@ -103,12 +103,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             LevelFilter::Off
         }
         Commands::Server { .. } => {
-            // Server mode: use specified log level, default to info if off
-            let level = cli.log_level.to_level_filter();
-            if level == LevelFilter::Off {
-                LevelFilter::Info
-            } else {
-                level
+            // Server mode: default to info if --log-level not provided, respect explicit off
+            match cli.log_level {
+                Some(level) => level.to_level_filter(),
+                None => LevelFilter::Info,
             }
         }
     };
@@ -163,7 +161,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     match cli.command {
         Commands::Query { args } => {
             let query_string = args.join(" ");
-            cli::handle_query(client, &query_string, cli.log_level.to_level_filter()).await?;
+            cli::handle_query(client, &query_string, cli.log_level.map_or(LevelFilter::Off, |l| l.to_level_filter())).await?;
         }
         Commands::Server { port, carousel_interval } => {
             if let Some(client) = client {
@@ -173,10 +171,10 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Interactive => {
-            cli::handle_interactive(client, cli.log_level.to_level_filter(), cli.log_time == TimeFormat::Local).await?;
+            cli::handle_interactive(client, cli.log_level.map_or(LevelFilter::Off, |l| l.to_level_filter()), cli.log_time == TimeFormat::Local).await?;
         }
         Commands::Tui => {
-            cli::handle_tui(client, cli.log_level.to_level_filter(), cli.log_time == TimeFormat::Local).await?;
+            cli::handle_tui(client, cli.log_level.map_or(LevelFilter::Off, |l| l.to_level_filter()), cli.log_time == TimeFormat::Local).await?;
         }
     }
 
