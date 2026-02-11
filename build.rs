@@ -14,11 +14,11 @@ fn main() {
         _ => "unknown".to_string(),
     };
     
-    // Check if working directory is dirty
+    // Check if tracked files have been modified (ignores untracked files)
     let dirty = Command::new("git")
-        .args(["status", "--porcelain"])
-        .output()
-        .map(|o| !o.stdout.is_empty())
+        .args(["diff", "--quiet", "HEAD"])
+        .status()
+        .map(|s| !s.success())
         .unwrap_or(false);
     
     let build_hash = if dirty {
