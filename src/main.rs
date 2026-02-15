@@ -80,6 +80,9 @@ enum Commands {
         /// Artist image carousel interval in seconds
         #[arg(long, default_value = "30")]
         carousel_interval: u32,
+        /// Path to a timed interchange libretto JSON file
+        #[arg(long)]
+        libretto: Option<String>,
     },
     /// Interactive mode - read commands from stdin
     Interactive,
@@ -163,9 +166,9 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let query_string = args.join(" ");
             cli::handle_query(client, &query_string, cli.log_level.map_or(LevelFilter::Off, |l| l.to_level_filter())).await?;
         }
-        Commands::Server { port, carousel_interval } => {
+        Commands::Server { port, carousel_interval, libretto } => {
             if let Some(client) = client {
-                server::start_server(client, port, carousel_interval).await?;
+                server::start_server(client, port, carousel_interval, libretto).await?;
             } else {
                 return Err("Server mode requires Roon connection. Remove --upnp-only flag.".into());
             }

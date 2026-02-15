@@ -71,6 +71,8 @@ fn get_local_ip() -> String {
 pub struct AppState {
     pub roon_client: Arc<Mutex<RoonClient>>,
     pub carousel_interval_ms: u32,
+    /// Loaded timed interchange libretto JSON (raw value, served as-is)
+    pub libretto_json: Option<Arc<serde_json::Value>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2123,6 +2125,370 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     }
 }
 
+/// Embedded libretto viewer HTML — a dedicated page for synchronized libretto display
+const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Libretto — Roon Remote Display</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+        }
+        #header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            background: linear-gradient(180deg, #1a1a2e 80%, transparent);
+            padding: 16px 24px 24px;
+        }
+        #track-info {
+            font-size: 14px;
+            color: #888;
+            margin-bottom: 4px;
+        }
+        #track-title {
+            font-size: 20px;
+            font-weight: bold;
+            color: #c9a84c;
+        }
+        #progress-bar {
+            margin-top: 8px;
+            height: 3px;
+            background: #333;
+            border-radius: 2px;
+            overflow: hidden;
+        }
+        #progress-fill {
+            height: 100%;
+            background: #c9a84c;
+            width: 0%;
+            transition: width 0.3s linear;
+        }
+        #status {
+            font-size: 12px;
+            color: #666;
+            margin-top: 4px;
+        }
+        #libretto {
+            padding: 8px 24px 40vh;
+        }
+        .segment {
+            display: flex;
+            gap: 16px;
+            padding: 6px 12px;
+            border-radius: 6px;
+            transition: background 0.3s, opacity 0.3s;
+            opacity: 0.4;
+            margin-bottom: 2px;
+        }
+        .segment.active {
+            background: rgba(201, 168, 76, 0.15);
+            opacity: 1.0;
+        }
+        .segment.past {
+            opacity: 0.6;
+        }
+        .segment.future {
+            opacity: 0.35;
+        }
+        .segment .character {
+            min-width: 120px;
+            font-size: 11px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #c9a84c;
+            padding-top: 3px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .segment .texts {
+            flex: 1;
+        }
+        .segment .text {
+            font-size: 16px;
+            line-height: 1.5;
+            color: #e8e8e8;
+            white-space: pre-wrap;
+        }
+        .segment .translation {
+            font-size: 13px;
+            line-height: 1.4;
+            color: #999;
+            font-style: italic;
+            margin-top: 2px;
+            white-space: pre-wrap;
+        }
+        .segment.active .text {
+            color: #fff;
+        }
+        .segment.active .translation {
+            color: #bbb;
+        }
+        .segment.active .character {
+            color: #dfc06e;
+        }
+        #no-track {
+            text-align: center;
+            padding: 80px 24px;
+            color: #666;
+            font-size: 18px;
+        }
+        @media (max-width: 600px) {
+            .segment { flex-direction: column; gap: 2px; }
+            .segment .character { text-align: left; min-width: auto; }
+            #libretto { padding: 8px 12px 40vh; }
+        }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <div id="track-info">Connecting...</div>
+        <div id="track-title"></div>
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div id="status"></div>
+    </div>
+    <div id="libretto">
+        <div id="no-track">Waiting for playback...</div>
+    </div>
+
+    <script>
+    let librettoData = null;
+    let currentTrack = null;
+    let currentSegmentIndex = -1;
+    let seekPosition = 0;
+    let trackLength = 0;
+    let nowPlayingZones = [];
+    let autoScroll = true;
+
+    // Load libretto data
+    async function loadLibretto() {
+        try {
+            const resp = await fetch('/libretto');
+            librettoData = await resp.json();
+            console.log('Loaded libretto:', librettoData.tracks?.length, 'tracks');
+        } catch (e) {
+            console.error('Failed to load libretto:', e);
+            document.getElementById('no-track').textContent = 'Failed to load libretto data';
+        }
+    }
+
+    // Match a Roon track title to a libretto track
+    // Strategy: normalize both, find best substring match
+    function matchTrack(roonTitle) {
+        if (!librettoData || !librettoData.tracks || !roonTitle) return null;
+
+        const normalize = s => s.toLowerCase()
+            .replace(/['']/g, "'")
+            .replace(/[""]/g, '"')
+            .replace(/\.\.\./g, '...')
+            .replace(/\s+/g, ' ')
+            .trim();
+
+        const roonNorm = normalize(roonTitle);
+
+        // Try exact match first
+        for (const track of librettoData.tracks) {
+            if (normalize(track.title) === roonNorm) return track;
+        }
+
+        // Try: libretto title starts with the roon title or vice versa
+        for (const track of librettoData.tracks) {
+            const libNorm = normalize(track.title);
+            if (libNorm.startsWith(roonNorm) || roonNorm.startsWith(libNorm)) return track;
+        }
+
+        // Try: disc/track number match (if Roon provides it in a pattern)
+        // Fallback: find best overlap by checking if significant words match
+        let bestMatch = null;
+        let bestScore = 0;
+        for (const track of librettoData.tracks) {
+            const libNorm = normalize(track.title);
+            // Count matching words (excluding very short ones)
+            const roonWords = roonNorm.split(/\s+/).filter(w => w.length > 2);
+            const libWords = libNorm.split(/\s+/).filter(w => w.length > 2);
+            const matches = roonWords.filter(w => libWords.includes(w)).length;
+            const score = matches / Math.max(roonWords.length, libWords.length, 1);
+            if (score > bestScore && score > 0.3) {
+                bestScore = score;
+                bestMatch = track;
+            }
+        }
+        return bestMatch;
+    }
+
+    // Find the active segment index for a given seek position
+    function findSegmentIndex(track, position) {
+        if (!track.segments || track.segments.length === 0) return -1;
+        let idx = -1;
+        for (let i = 0; i < track.segments.length; i++) {
+            if (track.segments[i].start <= position) {
+                idx = i;
+            } else {
+                break;
+            }
+        }
+        return idx;
+    }
+
+    // Render the libretto for a matched track
+    function renderTrack(track) {
+        const container = document.getElementById('libretto');
+        if (!track || !track.segments || track.segments.length === 0) {
+            container.innerHTML = '<div id="no-track">No libretto segments for this track</div>';
+            return;
+        }
+
+        let html = '';
+        for (let i = 0; i < track.segments.length; i++) {
+            const seg = track.segments[i];
+            html += `<div class="segment future" data-index="${i}" id="seg-${i}">`;
+            html += `<div class="character">${seg.character || ''}</div>`;
+            html += `<div class="texts">`;
+            if (seg.text) html += `<div class="text">${escapeHtml(seg.text)}</div>`;
+            if (seg.translation) html += `<div class="translation">${escapeHtml(seg.translation)}</div>`;
+            html += `</div></div>`;
+        }
+        container.innerHTML = html;
+    }
+
+    function escapeHtml(text) {
+        return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    }
+
+    // Update segment highlighting based on seek position
+    function updateHighlight(position) {
+        if (!currentTrack) return;
+        const newIndex = findSegmentIndex(currentTrack, position);
+        if (newIndex === currentSegmentIndex) return;
+
+        currentSegmentIndex = newIndex;
+        const segments = document.querySelectorAll('.segment');
+        segments.forEach((el, i) => {
+            el.classList.remove('active', 'past', 'future');
+            if (i < newIndex) el.classList.add('past');
+            else if (i === newIndex) el.classList.add('active');
+            else el.classList.add('future');
+        });
+
+        // Auto-scroll to active segment
+        if (autoScroll && newIndex >= 0) {
+            const activeEl = document.getElementById(`seg-${newIndex}`);
+            if (activeEl) {
+                activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            }
+        }
+
+        // Update progress bar
+        if (trackLength > 0) {
+            const pct = (position / trackLength) * 100;
+            document.getElementById('progress-fill').style.width = `${pct}%`;
+        }
+    }
+
+    // Handle zone data from /now-playing or WebSocket
+    function handleZoneUpdate(zones) {
+        nowPlayingZones = zones;
+        if (!librettoData) return;
+
+        // Find first playing zone with a track
+        const playing = zones.find(z => z.state === 'Playing' && z.track);
+        if (!playing) {
+            document.getElementById('track-info').textContent = 'Paused or stopped';
+            return;
+        }
+
+        const matched = matchTrack(playing.track);
+        if (matched && matched !== currentTrack) {
+            currentTrack = matched;
+            currentSegmentIndex = -1;
+            document.getElementById('track-title').textContent = currentTrack.title;
+            document.getElementById('track-info').textContent =
+                `${playing.zone_name} — ${playing.artist || ''} — ${playing.album || ''}`;
+            trackLength = playing.length_seconds || currentTrack.duration_seconds || 0;
+            renderTrack(currentTrack);
+        } else if (!matched) {
+            document.getElementById('track-info').textContent = `${playing.zone_name} — ${playing.track}`;
+            document.getElementById('track-title').textContent = 'No libretto match';
+            document.getElementById('status').textContent =
+                `Roon track: "${playing.track}" — no match in libretto`;
+        }
+
+        if (playing.position_seconds != null) {
+            seekPosition = playing.position_seconds;
+            updateHighlight(seekPosition);
+        }
+    }
+
+    // Fetch initial now-playing
+    async function fetchNowPlaying() {
+        try {
+            const resp = await fetch('/now-playing');
+            const data = await resp.json();
+            handleZoneUpdate(data.now_playing || []);
+        } catch (e) {
+            console.error('Error fetching now-playing:', e);
+        }
+    }
+
+    // Connect to WebSocket for real-time updates
+    function connectWebSocket() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+
+        ws.onopen = () => {
+            document.getElementById('status').textContent = 'Connected';
+            fetchNowPlaying();
+        };
+
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'zones_changed') {
+                    handleZoneUpdate(msg.now_playing || []);
+                } else if (msg.type === 'seek_updated') {
+                    seekPosition = msg.seek_position || 0;
+                    updateHighlight(seekPosition);
+                } else if (msg.type === 'connection_changed' && msg.connected) {
+                    fetchNowPlaying();
+                }
+            } catch (e) {
+                console.error('WS parse error:', e);
+            }
+        };
+
+        ws.onclose = () => {
+            document.getElementById('status').textContent = 'Disconnected — reconnecting...';
+            setTimeout(connectWebSocket, 3000);
+        };
+
+        ws.onerror = () => ws.close();
+    }
+
+    // Disable auto-scroll on manual scroll, re-enable after 5s idle
+    let scrollTimer = null;
+    document.addEventListener('scroll', () => {
+        autoScroll = false;
+        clearTimeout(scrollTimer);
+        scrollTimer = setTimeout(() => { autoScroll = true; }, 5000);
+    }, { passive: true });
+
+    // Init
+    (async () => {
+        await loadLibretto();
+        connectWebSocket();
+    })();
+    </script>
+</body>
+</html>
+"##;
+
 // Route documentation - keep this in sync with the actual routes
 const ROUTES: &[(&str, &str, &str)] = &[
     ("GET", "/", "Serve the web UI (SPA)"),
@@ -2141,14 +2507,38 @@ const ROUTES: &[(&str, &str, &str)] = &[
 ];
 
 /// Start the web server
-pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_interval: u32) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_interval: u32, libretto_path: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
     // Start background dCS device discovery (non-blocking)
     // Discovery runs in background and notifies when complete
     crate::dcs::start_discovery();
 
+    // Load timed interchange libretto if provided
+    let libretto_json = if let Some(path) = &libretto_path {
+        match std::fs::read_to_string(path) {
+            Ok(contents) => match serde_json::from_str::<serde_json::Value>(&contents) {
+                Ok(value) => {
+                    let track_count = value.get("tracks").and_then(|t| t.as_array()).map(|a| a.len()).unwrap_or(0);
+                    log::info!("Loaded timed libretto from {}: {} tracks", path, track_count);
+                    Some(Arc::new(value))
+                }
+                Err(e) => {
+                    log::error!("Failed to parse libretto JSON from {}: {}", path, e);
+                    None
+                }
+            }
+            Err(e) => {
+                log::error!("Failed to read libretto file {}: {}", path, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let state = AppState {
         roon_client: client,
         carousel_interval_ms: carousel_interval * 1000, // Convert seconds to milliseconds
+        libretto_json,
     };
 
     let app = Router::new()
@@ -2165,6 +2555,8 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_in
         .route("/seek/:zone_id", post(seek_handler))
         .route("/mute/:zone_id", post(mute_handler))
         .route("/play-from-queue/:zone_id", post(play_from_queue_handler))
+        .route("/libretto", get(libretto_handler))
+        .route("/libretto-view", get(libretto_view_handler))
         .layer(CorsLayer::permissive())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .with_state(state);
@@ -2183,6 +2575,9 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_in
     println!("  Network: http://{}:{}", local_ip, port);
     if _mdns.is_some() {
         println!("  mDNS:    http://roon-rd.local:{}", port);
+    }
+    if libretto_path.is_some() {
+        println!("  Libretto: http://localhost:{}/libretto-view", port);
     }
     println!("\nAPI endpoints:");
 
@@ -2205,6 +2600,22 @@ async fn spa_handler(State(state): State<AppState>) -> Html<String> {
         .replace("__VERSION__", &format!("v{}", env!("CARGO_PKG_VERSION")))
         .replace("__CAROUSEL_INTERVAL__", &state.carousel_interval_ms.to_string());
     Html(html)
+}
+
+/// Serve the timed interchange libretto JSON
+async fn libretto_handler(State(state): State<AppState>) -> Response {
+    match &state.libretto_json {
+        Some(json) => Json(json.as_ref().clone()).into_response(),
+        None => (StatusCode::NOT_FOUND, "No libretto loaded").into_response(),
+    }
+}
+
+/// Serve the libretto viewer page
+async fn libretto_view_handler(State(state): State<AppState>) -> Response {
+    if state.libretto_json.is_none() {
+        return (StatusCode::NOT_FOUND, Html("<h1>No libretto loaded</h1><p>Start the server with --libretto &lt;path&gt;</p>".to_string())).into_response();
+    }
+    Html(LIBRETTO_VIEW_HTML.to_string()).into_response()
 }
 
 async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
