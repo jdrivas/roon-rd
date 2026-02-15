@@ -2144,22 +2144,41 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             position: sticky;
             top: 0;
             z-index: 100;
-            background: linear-gradient(180deg, #1a1a2e 80%, transparent);
-            padding: 16px 24px 24px;
+            background: linear-gradient(180deg, #1a1a2e 85%, transparent);
+            padding: 16px 24px 28px;
+            border-bottom: 1px solid #2a2a4e;
         }
-        #track-info {
-            font-size: 14px;
-            color: #888;
+        #libretto-meta {
+            font-size: 13px;
+            color: #666;
+            margin-bottom: 8px;
+        }
+        #libretto-meta .album { color: #888; }
+        #libretto-meta .artist { color: #777; }
+        #roon-track {
+            font-size: 22px;
+            color: #e0e0e0;
+            font-weight: bold;
             margin-bottom: 4px;
         }
-        #track-title {
-            font-size: 20px;
-            font-weight: bold;
+        #matched-track {
+            font-size: 15px;
             color: #c9a84c;
+            margin-bottom: 6px;
         }
+        #matched-track .label { color: #666; font-size: 12px; }
+        #time-display {
+            font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+            font-size: 16px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+        #time-display .current { color: #e0e0e0; font-weight: bold; }
+        #time-display .total { color: #666; }
+        #time-display .seg-time { color: #c9a84c; }
         #progress-bar {
-            margin-top: 8px;
-            height: 3px;
+            margin-top: 6px;
+            height: 4px;
             background: #333;
             border-radius: 2px;
             overflow: hidden;
@@ -2171,21 +2190,22 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             transition: width 0.3s linear;
         }
         #status {
-            font-size: 12px;
-            color: #666;
-            margin-top: 4px;
+            font-size: 11px;
+            color: #555;
+            margin-top: 6px;
         }
         #libretto {
             padding: 8px 24px 40vh;
         }
         .segment {
             display: flex;
-            gap: 16px;
+            gap: 12px;
             padding: 6px 12px;
             border-radius: 6px;
             transition: background 0.3s, opacity 0.3s;
             opacity: 0.4;
             margin-bottom: 2px;
+            align-items: baseline;
         }
         .segment.active {
             background: rgba(201, 168, 76, 0.15);
@@ -2197,9 +2217,21 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         .segment.future {
             opacity: 0.35;
         }
+        .segment .seg-start {
+            min-width: 52px;
+            font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+            font-size: 11px;
+            color: #555;
+            padding-top: 4px;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .segment.active .seg-start {
+            color: #c9a84c;
+        }
         .segment .character {
             min-width: 120px;
-            font-size: 11px;
+            font-size: 13px;
             font-weight: 600;
             text-transform: uppercase;
             letter-spacing: 0.5px;
@@ -2212,13 +2244,13 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             flex: 1;
         }
         .segment .text {
-            font-size: 16px;
+            font-size: 18px;
             line-height: 1.5;
             color: #e8e8e8;
             white-space: pre-wrap;
         }
         .segment .translation {
-            font-size: 13px;
+            font-size: 14px;
             line-height: 1.4;
             color: #999;
             font-style: italic;
@@ -2227,9 +2259,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         }
         .segment.active .text {
             color: #fff;
+            font-size: 19px;
         }
         .segment.active .translation {
             color: #bbb;
+            font-size: 15px;
         }
         .segment.active .character {
             color: #dfc06e;
@@ -2243,14 +2277,17 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         @media (max-width: 600px) {
             .segment { flex-direction: column; gap: 2px; }
             .segment .character { text-align: left; min-width: auto; }
+            .segment .seg-start { text-align: left; min-width: auto; }
             #libretto { padding: 8px 12px 40vh; }
         }
     </style>
 </head>
 <body>
     <div id="header">
-        <div id="track-info">Connecting...</div>
-        <div id="track-title"></div>
+        <div id="libretto-meta">Loading libretto...</div>
+        <div id="roon-track">Connecting...</div>
+        <div id="matched-track"></div>
+        <div id="time-display"></div>
         <div id="progress-bar"><div id="progress-fill"></div></div>
         <div id="status"></div>
     </div>
@@ -2267,26 +2304,42 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     let nowPlayingZones = [];
     let autoScroll = true;
 
+    function formatTime(secs) {
+        if (secs == null || isNaN(secs)) return '--:--';
+        const s = Math.floor(secs);
+        const m = Math.floor(s / 60);
+        const ss = s % 60;
+        return `${m}:${ss.toString().padStart(2, '0')}`;
+    }
+
     // Load libretto data
     async function loadLibretto() {
         try {
             const resp = await fetch('/libretto');
             librettoData = await resp.json();
-            console.log('Loaded libretto:', librettoData.tracks?.length, 'tracks');
+            const trackCount = librettoData.tracks?.length || 0;
+            const opera = librettoData.opera || {};
+            const firstTrack = librettoData.tracks?.[0];
+            const album = firstTrack?.album || opera.title || 'Unknown';
+            const artist = firstTrack?.artist || '';
+            document.getElementById('libretto-meta').innerHTML =
+                `<span class="album">${escapeHtml(album)}</span>` +
+                (artist ? ` &mdash; <span class="artist">${escapeHtml(artist)}</span>` : '') +
+                ` &mdash; ${trackCount} tracks`;
+            console.log('Loaded libretto:', trackCount, 'tracks');
         } catch (e) {
             console.error('Failed to load libretto:', e);
-            document.getElementById('no-track').textContent = 'Failed to load libretto data';
+            document.getElementById('libretto-meta').textContent = 'Failed to load libretto data';
         }
     }
 
     // Match a Roon track title to a libretto track
-    // Strategy: normalize both, find best substring match
     function matchTrack(roonTitle) {
         if (!librettoData || !librettoData.tracks || !roonTitle) return null;
 
         const normalize = s => s.toLowerCase()
-            .replace(/['']/g, "'")
-            .replace(/[""]/g, '"')
+            .replace(/['\u2018\u2019]/g, "'")
+            .replace(/["\u201c\u201d]/g, '"')
             .replace(/\.\.\./g, '...')
             .replace(/\s+/g, ' ')
             .trim();
@@ -2304,13 +2357,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             if (libNorm.startsWith(roonNorm) || roonNorm.startsWith(libNorm)) return track;
         }
 
-        // Try: disc/track number match (if Roon provides it in a pattern)
-        // Fallback: find best overlap by checking if significant words match
+        // Fallback: best word overlap
         let bestMatch = null;
         let bestScore = 0;
         for (const track of librettoData.tracks) {
             const libNorm = normalize(track.title);
-            // Count matching words (excluding very short ones)
             const roonWords = roonNorm.split(/\s+/).filter(w => w.length > 2);
             const libWords = libNorm.split(/\s+/).filter(w => w.length > 2);
             const matches = roonWords.filter(w => libWords.includes(w)).length;
@@ -2348,8 +2399,10 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         let html = '';
         for (let i = 0; i < track.segments.length; i++) {
             const seg = track.segments[i];
+            const startStr = formatTime(seg.start);
             html += `<div class="segment future" data-index="${i}" id="seg-${i}">`;
-            html += `<div class="character">${seg.character || ''}</div>`;
+            html += `<div class="seg-start">${startStr}</div>`;
+            html += `<div class="character">${escapeHtml(seg.character || '')}</div>`;
             html += `<div class="texts">`;
             if (seg.text) html += `<div class="text">${escapeHtml(seg.text)}</div>`;
             if (seg.translation) html += `<div class="translation">${escapeHtml(seg.translation)}</div>`;
@@ -2362,9 +2415,28 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         return text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
     }
 
+    // Update time display
+    function updateTimeDisplay(position) {
+        const timeEl = document.getElementById('time-display');
+        let html = `<span class="current">${formatTime(position)}</span>`;
+        html += ` <span class="total">/ ${formatTime(trackLength)}</span>`;
+        if (currentTrack && currentSegmentIndex >= 0 && currentSegmentIndex < currentTrack.segments.length) {
+            const seg = currentTrack.segments[currentSegmentIndex];
+            const nextSeg = currentTrack.segments[currentSegmentIndex + 1];
+            html += `  &mdash;  <span class="seg-time">seg ${currentSegmentIndex + 1}/${currentTrack.segments.length}`;
+            html += ` @ ${formatTime(seg.start)}`;
+            if (nextSeg) html += ` &rarr; ${formatTime(nextSeg.start)}`;
+            html += `</span>`;
+        }
+        timeEl.innerHTML = html;
+    }
+
     // Update segment highlighting based on seek position
     function updateHighlight(position) {
         if (!currentTrack) return;
+
+        updateTimeDisplay(position);
+
         const newIndex = findSegmentIndex(currentTrack, position);
         if (newIndex === currentSegmentIndex) return;
 
@@ -2400,24 +2472,32 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         // Find first playing zone with a track
         const playing = zones.find(z => z.state === 'Playing' && z.track);
         if (!playing) {
-            document.getElementById('track-info').textContent = 'Paused or stopped';
+            document.getElementById('roon-track').textContent = 'Paused or stopped';
             return;
         }
+
+        // Always show Roon track prominently
+        document.getElementById('roon-track').textContent = playing.track;
 
         const matched = matchTrack(playing.track);
         if (matched && matched !== currentTrack) {
             currentTrack = matched;
             currentSegmentIndex = -1;
-            document.getElementById('track-title').textContent = currentTrack.title;
-            document.getElementById('track-info').textContent =
-                `${playing.zone_name} — ${playing.artist || ''} — ${playing.album || ''}`;
             trackLength = playing.length_seconds || currentTrack.duration_seconds || 0;
+
+            const discTrack = currentTrack.disc_number
+                ? `Disc ${currentTrack.disc_number}, Track ${currentTrack.track_number}`
+                : `Track ${currentTrack.track_number || '?'}`;
+            document.getElementById('matched-track').innerHTML =
+                `<span class="label">Matched:</span> ${escapeHtml(currentTrack.title)} (${discTrack}, ${currentTrack.segments?.length || 0} segments)`;
+
             renderTrack(currentTrack);
         } else if (!matched) {
-            document.getElementById('track-info').textContent = `${playing.zone_name} — ${playing.track}`;
-            document.getElementById('track-title').textContent = 'No libretto match';
-            document.getElementById('status').textContent =
-                `Roon track: "${playing.track}" — no match in libretto`;
+            currentTrack = null;
+            document.getElementById('matched-track').innerHTML =
+                `<span class="label">No match found for Roon track</span>`;
+            document.getElementById('libretto').innerHTML =
+                '<div id="no-track">No libretto match for this track</div>';
         }
 
         if (playing.position_seconds != null) {
