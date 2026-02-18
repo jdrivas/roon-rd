@@ -1626,6 +1626,7 @@ where
                             format!("[{}] queue_changed: zone={}, items={}, time={}", Local::now().format("%H:%M:%S"), zone_id, queue_items_remaining, queue_time_remaining)
                         }
                         crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
+                        crate::roon::WsMessage::LibrettoUpdate { .. } => continue,
                     }
                 } else {
                     // INFO/OFF: Show RAW JSON from Roon (unfiltered by serde structs)
@@ -1644,6 +1645,7 @@ where
                             format!("[{}] queue_changed: zone={}, items={}, time={}", Local::now().format("%H:%M:%S"), zone_id, queue_items_remaining, queue_time_remaining)
                         }
                         crate::roon::WsMessage::SeekUpdated { .. } => unreachable!(),
+                        crate::roon::WsMessage::LibrettoUpdate { .. } => continue,
                     }
                 };
 

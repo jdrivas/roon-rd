@@ -30,9 +30,6 @@ pub struct WsZoneData {
     pub dcs_format: Option<String>,
     pub queue_items_remaining: i64,
     pub queue_time_remaining: i64,
-    /// Libretto match result from server-side library matching (populated by server, not roon module)
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub libretto_match: Option<serde_json::Value>,
 }
 
 /// Message types for WebSocket updates
@@ -60,6 +57,14 @@ pub enum WsMessage {
         zone_id: String,
         queue_items_remaining: i64,
         queue_time_remaining: i64,
+    },
+    /// Libretto content update — sent when the matched track changes for a zone.
+    /// Separate from ZonesChanged so only libretto-view clients need to handle it.
+    #[serde(rename = "libretto_update")]
+    LibrettoUpdate {
+        zone_id: String,
+        /// None means no match for this zone's current track
+        content: Option<crate::server::library::LibrettoContent>,
     },
 }
 
@@ -253,7 +258,6 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
                 dcs_format: dcs_format.clone(),
                 queue_items_remaining: zone.queue_items_remaining,
                 queue_time_remaining: zone.queue_time_remaining,
-                libretto_match: None,
             };
 
             log::debug!("Built WsZoneData for {}: track={:?}, dcs_format={:?}",
@@ -993,7 +997,6 @@ impl RoonClient {
                     dcs_format,
                     queue_items_remaining: zone.queue_items_remaining,
                     queue_time_remaining: zone.queue_time_remaining,
-                    libretto_match: None,
                 }
             }
         }).collect();

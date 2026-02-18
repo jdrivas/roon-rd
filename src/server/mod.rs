@@ -2098,6 +2098,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
         let _ = socket.send(axum::extract::ws::Message::Text(json)).await;
     }
 
+    // Per-connection state: last libretto match key per zone (file_id:track_index or "none")
+    // Used to deduplicate — only send LibrettoUpdate when the match actually changes
+    let mut last_match: std::collections::HashMap<String, String> = std::collections::HashMap::new();
+
     // Handle incoming and outgoing messages
     loop {
         tokio::select! {
@@ -2105,9 +2109,43 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
-                        // Enrich zone data with libretto matches from library
-                        let enriched = enrich_with_libretto_match(msg, &state.library);
-                        if let Ok(json) = serde_json::to_string(&enriched) {
+                        // Check for libretto updates on ZonesChanged
+                        if let crate::roon::WsMessage::ZonesChanged { ref now_playing, .. } = msg {
+                            if let Some(ref lib) = state.library {
+                                for zone in now_playing {
+                                    let content = lib.match_and_extract(
+                                        zone.album.as_deref(),
+                                        zone.track.as_deref(),
+                                        None, // disc_number not in WsZoneData yet
+                                        None, // track_number not in WsZoneData yet
+                                    );
+
+                                    // Build a dedup key: "file_id:track_index" or "none"
+                                    let match_key = match &content {
+                                        Some(c) => format!("{}:{}", c.file_id, c.track_index),
+                                        None => "none".to_string(),
+                                    };
+
+                                    let prev = last_match.get(&zone.zone_id);
+                                    if prev.map(|p| p.as_str()) != Some(&match_key) {
+                                        last_match.insert(zone.zone_id.clone(), match_key);
+
+                                        let update = crate::roon::WsMessage::LibrettoUpdate {
+                                            zone_id: zone.zone_id.clone(),
+                                            content,
+                                        };
+                                        if let Ok(json) = serde_json::to_string(&update) {
+                                            if socket.send(axum::extract::ws::Message::Text(json)).await.is_err() {
+                                                break;
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+
+                        // Always forward the original message (ZonesChanged, SeekUpdated, etc.)
+                        if let Ok(json) = serde_json::to_string(&msg) {
                             if socket.send(axum::extract::ws::Message::Text(json)).await.is_err() {
                                 break;
                             }
@@ -2129,36 +2167,6 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 }
             }
         }
-    }
-}
-
-/// Enrich a WsMessage with libretto match info from the library.
-/// For ZonesChanged messages, attempts to match each zone's currently playing track
-/// against the loaded libretto library.
-fn enrich_with_libretto_match(
-    msg: crate::roon::WsMessage,
-    lib: &Option<Arc<library::LibrettoLibrary>>,
-) -> crate::roon::WsMessage {
-    let lib = match lib {
-        Some(lib) => lib,
-        None => return msg,
-    };
-
-    match msg {
-        crate::roon::WsMessage::ZonesChanged { mut now_playing, raw_zones, raw_json } => {
-            for zone in &mut now_playing {
-                if let Some(track_match) = lib.match_track(
-                    zone.album.as_deref(),
-                    zone.track.as_deref(),
-                    None, // disc_number not in WsZoneData yet
-                    None, // track_number not in WsZoneData yet
-                ) {
-                    zone.libretto_match = serde_json::to_value(&track_match).ok();
-                }
-            }
-            crate::roon::WsMessage::ZonesChanged { now_playing, raw_zones, raw_json }
-        }
-        other => other,
     }
 }
 
@@ -2366,18 +2374,14 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     </div>
 
     <script>
-    let librettoData = null;
-    let currentTrack = null;
+    // State — the SPA is a pure renderer; all matching happens server-side
+    let currentContent = null;   // LibrettoContent from server (segments, metadata)
     let currentSegmentIndex = -1;
     let seekPosition = 0;
     let trackLength = 0;
-    let nowPlayingZones = [];
     let autoScroll = true;
     // Maps segment index → { start, end } of its group range, or null if ungrouped
     let segmentGroupMap = [];
-    // Multi-file library cache: file_id → parsed JSON
-    let librettoCache = {};
-    let currentFileId = null;
 
     function formatTime(secs) {
         if (secs == null || isNaN(secs)) return '--:--';
@@ -2387,138 +2391,12 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         return `${m}:${ss.toString().padStart(2, '0')}`;
     }
 
-    // Load libretto data — tries library mode first, falls back to single-file
-    async function loadLibretto() {
-        try {
-            // Check if library mode is available
-            const libResp = await fetch('/librettos');
-            const libData = await libResp.json();
-            if (libData.count > 0) {
-                console.log('Library mode:', libData.count, 'files available');
-                document.getElementById('libretto-meta').innerHTML =
-                    `Library: ${libData.count} libretto file${libData.count > 1 ? 's' : ''} loaded`;
-                // Don't load any specific file yet — wait for server-side match
-                return;
-            }
-        } catch (e) {
-            console.log('Library endpoint not available, trying single-file mode');
-        }
-
-        // Fall back to single-file /libretto endpoint
-        try {
-            const resp = await fetch('/libretto');
-            if (resp.ok) {
-                librettoData = await resp.json();
-                updateLibrettoMeta(librettoData);
-                console.log('Loaded single-file libretto:', librettoData.tracks?.length || 0, 'tracks');
-            }
-        } catch (e) {
-            console.error('Failed to load libretto:', e);
-            document.getElementById('libretto-meta').textContent = 'Failed to load libretto data';
-        }
-    }
-
-    // Fetch a libretto file by file_id (with caching)
-    async function loadLibrettoByFileId(fileId) {
-        if (librettoCache[fileId]) {
-            return librettoCache[fileId];
-        }
-        try {
-            const resp = await fetch(`/libretto/${encodeURIComponent(fileId)}`);
-            if (resp.ok) {
-                const data = await resp.json();
-                librettoCache[fileId] = data;
-                console.log(`Cached libretto '${fileId}':`, data.tracks?.length || 0, 'tracks');
-                return data;
-            }
-        } catch (e) {
-            console.error(`Failed to load libretto '${fileId}':`, e);
-        }
-        return null;
-    }
-
-    // Update the header metadata display for a libretto
-    function updateLibrettoMeta(data) {
-        if (!data) return;
-        const trackCount = data.tracks?.length || 0;
-        const opera = data.opera || {};
-        const firstTrack = data.tracks?.[0];
-        const album = firstTrack?.album || opera.title || 'Unknown';
-        const artist = firstTrack?.artist || '';
-        document.getElementById('libretto-meta').innerHTML =
-            `<span class="album">${escapeHtml(album)}</span>` +
-            (artist ? ` &mdash; <span class="artist">${escapeHtml(artist)}</span>` : '') +
-            ` &mdash; ${trackCount} tracks`;
-    }
-
-    // Match a Roon track title to a libretto track
-    function matchTrack(roonTitle) {
-        if (!librettoData || !librettoData.tracks || !roonTitle) return null;
-
-        const normalize = s => s.toLowerCase()
-            .replace(/['\u2018\u2019]/g, "'")
-            .replace(/["\u201c\u201d]/g, '"')
-            .replace(/\.\.\./g, ' ')
-            .replace(/\s+/g, ' ')
-            .trim();
-
-        // Strip opera-title prefix: "Le nozze di Figaro, K. 492, Act I: No. 1..."
-        // → "No. 1..." (everything after the last colon-space)
-        const stripPrefix = s => {
-            const idx = s.lastIndexOf(': ');
-            return idx >= 0 ? s.substring(idx + 2) : s;
-        };
-
-        // Extract words, stripping punctuation from each
-        const extractWords = s => s
-            .replace(/[.,;:!?\-–—"'()\/\[\]{}]/g, ' ')
-            .split(/\s+/)
-            .filter(w => w.length > 2);
-
-        const roonNorm = normalize(roonTitle);
-        const roonStripped = stripPrefix(roonNorm);
-
-        // Try exact match first
-        for (const track of librettoData.tracks) {
-            if (normalize(track.title) === roonNorm) return track;
-        }
-
-        // Try: libretto title starts with the roon title or vice versa
-        // Also try with stripped prefix
-        for (const track of librettoData.tracks) {
-            const libNorm = normalize(track.title);
-            if (libNorm.startsWith(roonNorm) || roonNorm.startsWith(libNorm)) return track;
-            if (libNorm.startsWith(roonStripped) || roonStripped.startsWith(libNorm)) return track;
-        }
-
-        // Fallback: best word overlap (using punctuation-stripped words)
-        let bestMatch = null;
-        let bestScore = 0;
-        const roonWords = extractWords(roonStripped);
-        const roonWordSet = new Set(roonWords);
-
-        for (const track of librettoData.tracks) {
-            const libNorm = normalize(track.title);
-            const libWords = extractWords(libNorm);
-            const libWordSet = new Set(libWords);
-            const matches = [...roonWordSet].filter(w => libWordSet.has(w)).length;
-            const score = matches / Math.max(roonWordSet.size, libWordSet.size, 1);
-            if (score > bestScore && score > 0.25) {
-                bestScore = score;
-                bestMatch = track;
-            }
-        }
-        console.log('matchTrack:', roonTitle, '→', bestMatch?.title || 'NO MATCH',
-            `(score=${bestScore.toFixed(2)}, stripped="${roonStripped}")`);
-        return bestMatch;
-    }
-
     // Find the active segment index for a given seek position
-    function findSegmentIndex(track, position) {
-        if (!track.segments || track.segments.length === 0) return -1;
+    function findSegmentIndex(segments, position) {
+        if (!segments || segments.length === 0) return -1;
         let idx = -1;
-        for (let i = 0; i < track.segments.length; i++) {
-            if (track.segments[i].start <= position) {
+        for (let i = 0; i < segments.length; i++) {
+            if (segments[i].start <= position) {
                 idx = i;
             } else {
                 break;
@@ -2566,26 +2444,26 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         return html;
     }
 
-    // Render the libretto for a matched track
-    function renderTrack(track) {
+    // Render the libretto segments
+    function renderSegments(segments) {
         const container = document.getElementById('libretto');
-        if (!track || !track.segments || track.segments.length === 0) {
+        if (!segments || segments.length === 0) {
             container.innerHTML = '<div id="no-track">No libretto segments for this track</div>';
             segmentGroupMap = [];
             return;
         }
 
-        segmentGroupMap = buildGroupMap(track.segments);
+        segmentGroupMap = buildGroupMap(segments);
 
         let html = '';
         let i = 0;
-        while (i < track.segments.length) {
+        while (i < segments.length) {
             const grp = segmentGroupMap[i];
             if (grp && i === grp.start) {
                 // Render ensemble group container
                 html += `<div class="ensemble-group future" id="group-${grp.start}">`;
                 for (let j = grp.start; j <= grp.end; j++) {
-                    const seg = track.segments[j];
+                    const seg = segments[j];
                     const isGroupCont = j > grp.start;
                     html += `<div class="segment future" data-index="${j}" id="seg-${j}">`;
                     html += renderSegmentInner(seg, j, isGroupCont);
@@ -2594,7 +2472,7 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
                 html += `</div>`;
                 i = grp.end + 1;
             } else {
-                const seg = track.segments[i];
+                const seg = segments[i];
                 html += `<div class="segment future" data-index="${i}" id="seg-${i}">`;
                 html += renderSegmentInner(seg, i, false);
                 html += `</div>`;
@@ -2613,10 +2491,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         const timeEl = document.getElementById('time-display');
         let html = `<span class="current">${formatTime(position)}</span>`;
         html += ` <span class="total">/ ${formatTime(trackLength)}</span>`;
-        if (currentTrack && currentSegmentIndex >= 0 && currentSegmentIndex < currentTrack.segments.length) {
-            const seg = currentTrack.segments[currentSegmentIndex];
-            const nextSeg = currentTrack.segments[currentSegmentIndex + 1];
-            html += `  &mdash;  <span class="seg-time">seg ${currentSegmentIndex + 1}/${currentTrack.segments.length}`;
+        const segs = currentContent?.segments;
+        if (segs && currentSegmentIndex >= 0 && currentSegmentIndex < segs.length) {
+            const seg = segs[currentSegmentIndex];
+            const nextSeg = segs[currentSegmentIndex + 1];
+            html += `  &mdash;  <span class="seg-time">seg ${currentSegmentIndex + 1}/${segs.length}`;
             html += ` @ ${formatTime(seg.start)}`;
             if (nextSeg) html += ` &rarr; ${formatTime(nextSeg.start)}`;
             html += `</span>`;
@@ -2626,11 +2505,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
 
     // Update segment highlighting based on seek position
     function updateHighlight(position) {
-        if (!currentTrack) return;
+        if (!currentContent) return;
 
         updateTimeDisplay(position);
 
-        const newIndex = findSegmentIndex(currentTrack, position);
+        const newIndex = findSegmentIndex(currentContent.segments, position);
         if (newIndex === currentSegmentIndex) return;
 
         currentSegmentIndex = newIndex;
@@ -2683,10 +2562,8 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         }
     }
 
-    // Handle zone data from /now-playing or WebSocket
-    async function handleZoneUpdate(zones) {
-        nowPlayingZones = zones;
-
+    // Handle zone data from WebSocket — only updates track title and position
+    function handleZoneUpdate(zones) {
         // Find first playing zone with a track
         const playing = zones.find(z => z.state === 'Playing' && z.track);
         if (!playing) {
@@ -2694,68 +2571,8 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             return;
         }
 
-        // Always show Roon track prominently
         document.getElementById('roon-track').textContent = playing.track;
-
-        // If server provides a libretto_match, use it to load the right file
-        if (playing.libretto_match) {
-            const lm = playing.libretto_match;
-            if (lm.file_id !== currentFileId) {
-                const data = await loadLibrettoByFileId(lm.file_id);
-                if (data) {
-                    librettoData = data;
-                    currentFileId = lm.file_id;
-                    updateLibrettoMeta(data);
-                }
-            }
-            // Use server-provided track_index for direct match
-            if (librettoData && lm.track_index != null) {
-                const matched = librettoData.tracks?.[lm.track_index];
-                if (matched && matched !== currentTrack) {
-                    currentTrack = matched;
-                    currentSegmentIndex = -1;
-                    trackLength = playing.length_seconds || currentTrack.duration_seconds || 0;
-
-                    const discTrack = currentTrack.disc_number
-                        ? `Disc ${currentTrack.disc_number}, Track ${currentTrack.track_number}`
-                        : `Track ${currentTrack.track_number || '?'}`;
-                    const method = lm.match_method || 'server';
-                    document.getElementById('matched-track').innerHTML =
-                        `<span class="label">Matched (${method}):</span> ${escapeHtml(currentTrack.title)} (${discTrack}, ${currentTrack.segments?.length || 0} segments)`;
-
-                    renderTrack(currentTrack);
-                }
-                if (playing.position_seconds != null) {
-                    seekPosition = playing.position_seconds;
-                    updateHighlight(seekPosition);
-                }
-                return;
-            }
-        }
-
-        // Fall back to client-side matching (single-file mode)
-        if (!librettoData) return;
-
-        const matched = matchTrack(playing.track);
-        if (matched && matched !== currentTrack) {
-            currentTrack = matched;
-            currentSegmentIndex = -1;
-            trackLength = playing.length_seconds || currentTrack.duration_seconds || 0;
-
-            const discTrack = currentTrack.disc_number
-                ? `Disc ${currentTrack.disc_number}, Track ${currentTrack.track_number}`
-                : `Track ${currentTrack.track_number || '?'}`;
-            document.getElementById('matched-track').innerHTML =
-                `<span class="label">Matched:</span> ${escapeHtml(currentTrack.title)} (${discTrack}, ${currentTrack.segments?.length || 0} segments)`;
-
-            renderTrack(currentTrack);
-        } else if (!matched) {
-            currentTrack = null;
-            document.getElementById('matched-track').innerHTML =
-                `<span class="label">No match found for Roon track</span>`;
-            document.getElementById('libretto').innerHTML =
-                '<div id="no-track">No libretto match for this track</div>';
-        }
+        trackLength = playing.length_seconds || trackLength;
 
         if (playing.position_seconds != null) {
             seekPosition = playing.position_seconds;
@@ -2763,14 +2580,46 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         }
     }
 
-    // Fetch initial now-playing
-    async function fetchNowPlaying() {
-        try {
-            const resp = await fetch('/now-playing');
-            const data = await resp.json();
-            handleZoneUpdate(data.now_playing || []);
-        } catch (e) {
-            console.error('Error fetching now-playing:', e);
+    // Handle libretto content update from server
+    function handleLibrettoUpdate(msg) {
+        const content = msg.content;
+
+        if (!content) {
+            // No match for this zone
+            currentContent = null;
+            currentSegmentIndex = -1;
+            document.getElementById('matched-track').innerHTML =
+                `<span class="label">No libretto match for current track</span>`;
+            document.getElementById('libretto-meta').textContent = '';
+            document.getElementById('libretto').innerHTML =
+                '<div id="no-track">No libretto match for this track</div>';
+            return;
+        }
+
+        // Update metadata display
+        const opera = content.opera_title || '';
+        const album = content.album || '';
+        const artist = content.artist || '';
+        let metaHtml = '';
+        if (opera) metaHtml += `<span class="album">${escapeHtml(opera)}</span>`;
+        if (album && album !== opera) metaHtml += ` &mdash; <span class="album">${escapeHtml(album)}</span>`;
+        if (artist) metaHtml += ` &mdash; <span class="artist">${escapeHtml(artist)}</span>`;
+        document.getElementById('libretto-meta').innerHTML = metaHtml;
+
+        // Update matched track display
+        const method = content.match_method || 'server';
+        const segCount = content.segments?.length || 0;
+        document.getElementById('matched-track').innerHTML =
+            `<span class="label">Matched (${method}):</span> ${escapeHtml(content.track_title)} (${segCount} segments)`;
+
+        // Store and render
+        currentContent = content;
+        currentSegmentIndex = -1;
+        renderSegments(content.segments);
+
+        // Apply current seek position
+        if (seekPosition > 0) {
+            updateHighlight(seekPosition);
         }
     }
 
@@ -2781,7 +2630,6 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
 
         ws.onopen = () => {
             document.getElementById('status').textContent = 'Connected';
-            fetchNowPlaying();
         };
 
         ws.onmessage = (event) => {
@@ -2789,11 +2637,14 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
                 const msg = JSON.parse(event.data);
                 if (msg.type === 'zones_changed') {
                     handleZoneUpdate(msg.now_playing || []);
+                } else if (msg.type === 'libretto_update') {
+                    handleLibrettoUpdate(msg);
                 } else if (msg.type === 'seek_updated') {
                     seekPosition = msg.seek_position || 0;
                     updateHighlight(seekPosition);
-                } else if (msg.type === 'connection_changed' && msg.connected) {
-                    fetchNowPlaying();
+                } else if (msg.type === 'connection_changed') {
+                    document.getElementById('status').textContent =
+                        msg.connected ? 'Connected to Roon' : 'Roon disconnected';
                 }
             } catch (e) {
                 console.error('WS parse error:', e);
@@ -2817,10 +2668,7 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     }, { passive: true });
 
     // Init
-    (async () => {
-        await loadLibretto();
-        connectWebSocket();
-    })();
+    connectWebSocket();
     </script>
 </body>
 </html>
