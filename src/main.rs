@@ -1,4 +1,5 @@
 mod cli;
+mod config;
 mod server;
 mod roon;
 mod upnp;
@@ -75,14 +76,20 @@ enum Commands {
     /// Start web server mode
     Server {
         /// Port to listen on
-        #[arg(short, long, default_value = "3000")]
-        port: u16,
+        #[arg(short, long)]
+        port: Option<u16>,
         /// Artist image carousel interval in seconds
-        #[arg(long, default_value = "30")]
-        carousel_interval: u32,
+        #[arg(long)]
+        carousel_interval: Option<u32>,
         /// Path to a timed interchange libretto JSON file
         #[arg(long)]
         libretto: Option<String>,
+        /// Directory containing *.interchange.json files for multi-opera support
+        #[arg(long)]
+        libretto_dir: Option<String>,
+        /// Path to config file (default: ~/.config/roon-rd/config.toml)
+        #[arg(long)]
+        config: Option<String>,
     },
     /// Interactive mode - read commands from stdin
     Interactive,
@@ -166,9 +173,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let query_string = args.join(" ");
             cli::handle_query(client, &query_string, cli.log_level.map_or(LevelFilter::Off, |l| l.to_level_filter())).await?;
         }
-        Commands::Server { port, carousel_interval, libretto } => {
+        Commands::Server { port, carousel_interval, libretto, libretto_dir, config: config_path } => {
+            // Load layered config: defaults < config file < env vars < CLI args
+            let app_config = config::load_config(
+                config_path.as_deref(),
+                config::CliOverrides {
+                    port,
+                    carousel_interval,
+                    libretto,
+                    libretto_dir,
+                },
+            ).map_err(|e| format!("Configuration error: {}", e))?;
+
             if let Some(client) = client {
-                server::start_server(client, port, carousel_interval, libretto).await?;
+                server::start_server(client, app_config).await?;
             } else {
                 return Err("Server mode requires Roon connection. Remove --upnp-only flag.".into());
             }

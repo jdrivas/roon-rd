@@ -1,3 +1,5 @@
+pub mod library;
+
 use axum::{
     routing::{get, post},
     Router,
@@ -72,7 +74,10 @@ pub struct AppState {
     pub roon_client: Arc<Mutex<RoonClient>>,
     pub carousel_interval_ms: u32,
     /// Loaded timed interchange libretto JSON (raw value, served as-is)
+    /// Used for single-file --libretto mode (legacy)
     pub libretto_json: Option<Arc<serde_json::Value>>,
+    /// Multi-file libretto library (from --libretto-dir)
+    pub library: Option<Arc<library::LibrettoLibrary>>,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -2100,7 +2105,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
-                        if let Ok(json) = serde_json::to_string(&msg) {
+                        // Enrich zone data with libretto matches from library
+                        let enriched = enrich_with_libretto_match(msg, &state.library);
+                        if let Ok(json) = serde_json::to_string(&enriched) {
                             if socket.send(axum::extract::ws::Message::Text(json)).await.is_err() {
                                 break;
                             }
@@ -2122,6 +2129,36 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                 }
             }
         }
+    }
+}
+
+/// Enrich a WsMessage with libretto match info from the library.
+/// For ZonesChanged messages, attempts to match each zone's currently playing track
+/// against the loaded libretto library.
+fn enrich_with_libretto_match(
+    msg: crate::roon::WsMessage,
+    lib: &Option<Arc<library::LibrettoLibrary>>,
+) -> crate::roon::WsMessage {
+    let lib = match lib {
+        Some(lib) => lib,
+        None => return msg,
+    };
+
+    match msg {
+        crate::roon::WsMessage::ZonesChanged { mut now_playing, raw_zones, raw_json } => {
+            for zone in &mut now_playing {
+                if let Some(track_match) = lib.match_track(
+                    zone.album.as_deref(),
+                    zone.track.as_deref(),
+                    None, // disc_number not in WsZoneData yet
+                    None, // track_number not in WsZoneData yet
+                ) {
+                    zone.libretto_match = serde_json::to_value(&track_match).ok();
+                }
+            }
+            crate::roon::WsMessage::ZonesChanged { now_playing, raw_zones, raw_json }
+        }
+        other => other,
     }
 }
 
@@ -2242,19 +2279,30 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         }
         .segment .texts {
             flex: 1;
+            display: flex;
+            gap: 24px;
         }
         .segment .text {
+            flex: 1;
             font-size: 18px;
             line-height: 1.5;
             color: #e8e8e8;
             white-space: pre-wrap;
         }
         .segment .translation {
+            flex: 1;
+            font-size: 15px;
+            line-height: 1.5;
+            color: #888;
+            font-style: italic;
+            white-space: pre-wrap;
+        }
+        .segment .direction-text {
+            flex: 1 1 100%;
             font-size: 14px;
             line-height: 1.4;
-            color: #999;
+            color: #9a8a5c;
             font-style: italic;
-            margin-top: 2px;
             white-space: pre-wrap;
         }
         .segment.active .text {
@@ -2263,7 +2311,7 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         }
         .segment.active .translation {
             color: #bbb;
-            font-size: 15px;
+            font-size: 16px;
         }
         .segment.active .character {
             color: #dfc06e;
@@ -2274,11 +2322,33 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             color: #666;
             font-size: 18px;
         }
+        .ensemble-group {
+            border-left: 3px solid rgba(201, 168, 76, 0.25);
+            margin-left: 52px;
+            padding-left: 8px;
+            margin-bottom: 4px;
+            border-radius: 0 6px 6px 0;
+        }
+        .ensemble-group.active {
+            border-left-color: rgba(201, 168, 76, 0.7);
+            background: rgba(201, 168, 76, 0.06);
+        }
+        .ensemble-group.past {
+            border-left-color: rgba(201, 168, 76, 0.15);
+        }
+        .ensemble-group .segment {
+            margin-bottom: 0;
+        }
+        .ensemble-group .segment .seg-start.group-cont {
+            visibility: hidden;
+        }
         @media (max-width: 600px) {
             .segment { flex-direction: column; gap: 2px; }
+            .segment .texts { flex-direction: column; gap: 4px; }
             .segment .character { text-align: left; min-width: auto; }
             .segment .seg-start { text-align: left; min-width: auto; }
             #libretto { padding: 8px 12px 40vh; }
+            .ensemble-group { margin-left: 0; }
         }
     </style>
 </head>
@@ -2303,6 +2373,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     let trackLength = 0;
     let nowPlayingZones = [];
     let autoScroll = true;
+    // Maps segment index → { start, end } of its group range, or null if ungrouped
+    let segmentGroupMap = [];
+    // Multi-file library cache: file_id → parsed JSON
+    let librettoCache = {};
+    let currentFileId = null;
 
     function formatTime(secs) {
         if (secs == null || isNaN(secs)) return '--:--';
@@ -2312,25 +2387,68 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         return `${m}:${ss.toString().padStart(2, '0')}`;
     }
 
-    // Load libretto data
+    // Load libretto data — tries library mode first, falls back to single-file
     async function loadLibretto() {
         try {
+            // Check if library mode is available
+            const libResp = await fetch('/librettos');
+            const libData = await libResp.json();
+            if (libData.count > 0) {
+                console.log('Library mode:', libData.count, 'files available');
+                document.getElementById('libretto-meta').innerHTML =
+                    `Library: ${libData.count} libretto file${libData.count > 1 ? 's' : ''} loaded`;
+                // Don't load any specific file yet — wait for server-side match
+                return;
+            }
+        } catch (e) {
+            console.log('Library endpoint not available, trying single-file mode');
+        }
+
+        // Fall back to single-file /libretto endpoint
+        try {
             const resp = await fetch('/libretto');
-            librettoData = await resp.json();
-            const trackCount = librettoData.tracks?.length || 0;
-            const opera = librettoData.opera || {};
-            const firstTrack = librettoData.tracks?.[0];
-            const album = firstTrack?.album || opera.title || 'Unknown';
-            const artist = firstTrack?.artist || '';
-            document.getElementById('libretto-meta').innerHTML =
-                `<span class="album">${escapeHtml(album)}</span>` +
-                (artist ? ` &mdash; <span class="artist">${escapeHtml(artist)}</span>` : '') +
-                ` &mdash; ${trackCount} tracks`;
-            console.log('Loaded libretto:', trackCount, 'tracks');
+            if (resp.ok) {
+                librettoData = await resp.json();
+                updateLibrettoMeta(librettoData);
+                console.log('Loaded single-file libretto:', librettoData.tracks?.length || 0, 'tracks');
+            }
         } catch (e) {
             console.error('Failed to load libretto:', e);
             document.getElementById('libretto-meta').textContent = 'Failed to load libretto data';
         }
+    }
+
+    // Fetch a libretto file by file_id (with caching)
+    async function loadLibrettoByFileId(fileId) {
+        if (librettoCache[fileId]) {
+            return librettoCache[fileId];
+        }
+        try {
+            const resp = await fetch(`/libretto/${encodeURIComponent(fileId)}`);
+            if (resp.ok) {
+                const data = await resp.json();
+                librettoCache[fileId] = data;
+                console.log(`Cached libretto '${fileId}':`, data.tracks?.length || 0, 'tracks');
+                return data;
+            }
+        } catch (e) {
+            console.error(`Failed to load libretto '${fileId}':`, e);
+        }
+        return null;
+    }
+
+    // Update the header metadata display for a libretto
+    function updateLibrettoMeta(data) {
+        if (!data) return;
+        const trackCount = data.tracks?.length || 0;
+        const opera = data.opera || {};
+        const firstTrack = data.tracks?.[0];
+        const album = firstTrack?.album || opera.title || 'Unknown';
+        const artist = firstTrack?.artist || '';
+        document.getElementById('libretto-meta').innerHTML =
+            `<span class="album">${escapeHtml(album)}</span>` +
+            (artist ? ` &mdash; <span class="artist">${escapeHtml(artist)}</span>` : '') +
+            ` &mdash; ${trackCount} tracks`;
     }
 
     // Match a Roon track title to a libretto track
@@ -2340,11 +2458,25 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         const normalize = s => s.toLowerCase()
             .replace(/['\u2018\u2019]/g, "'")
             .replace(/["\u201c\u201d]/g, '"')
-            .replace(/\.\.\./g, '...')
+            .replace(/\.\.\./g, ' ')
             .replace(/\s+/g, ' ')
             .trim();
 
+        // Strip opera-title prefix: "Le nozze di Figaro, K. 492, Act I: No. 1..."
+        // → "No. 1..." (everything after the last colon-space)
+        const stripPrefix = s => {
+            const idx = s.lastIndexOf(': ');
+            return idx >= 0 ? s.substring(idx + 2) : s;
+        };
+
+        // Extract words, stripping punctuation from each
+        const extractWords = s => s
+            .replace(/[.,;:!?\-–—"'()\/\[\]{}]/g, ' ')
+            .split(/\s+/)
+            .filter(w => w.length > 2);
+
         const roonNorm = normalize(roonTitle);
+        const roonStripped = stripPrefix(roonNorm);
 
         // Try exact match first
         for (const track of librettoData.tracks) {
@@ -2352,25 +2484,32 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         }
 
         // Try: libretto title starts with the roon title or vice versa
+        // Also try with stripped prefix
         for (const track of librettoData.tracks) {
             const libNorm = normalize(track.title);
             if (libNorm.startsWith(roonNorm) || roonNorm.startsWith(libNorm)) return track;
+            if (libNorm.startsWith(roonStripped) || roonStripped.startsWith(libNorm)) return track;
         }
 
-        // Fallback: best word overlap
+        // Fallback: best word overlap (using punctuation-stripped words)
         let bestMatch = null;
         let bestScore = 0;
+        const roonWords = extractWords(roonStripped);
+        const roonWordSet = new Set(roonWords);
+
         for (const track of librettoData.tracks) {
             const libNorm = normalize(track.title);
-            const roonWords = roonNorm.split(/\s+/).filter(w => w.length > 2);
-            const libWords = libNorm.split(/\s+/).filter(w => w.length > 2);
-            const matches = roonWords.filter(w => libWords.includes(w)).length;
-            const score = matches / Math.max(roonWords.length, libWords.length, 1);
-            if (score > bestScore && score > 0.3) {
+            const libWords = extractWords(libNorm);
+            const libWordSet = new Set(libWords);
+            const matches = [...roonWordSet].filter(w => libWordSet.has(w)).length;
+            const score = matches / Math.max(roonWordSet.size, libWordSet.size, 1);
+            if (score > bestScore && score > 0.25) {
                 bestScore = score;
                 bestMatch = track;
             }
         }
+        console.log('matchTrack:', roonTitle, '→', bestMatch?.title || 'NO MATCH',
+            `(score=${bestScore.toFixed(2)}, stripped="${roonStripped}")`);
         return bestMatch;
     }
 
@@ -2388,25 +2527,79 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         return idx;
     }
 
+    // Build group ranges: find consecutive runs of segments sharing the same group tag
+    function buildGroupMap(segments) {
+        const map = new Array(segments.length).fill(null);
+        let i = 0;
+        while (i < segments.length) {
+            const g = segments[i].group;
+            if (g) {
+                const start = i;
+                while (i < segments.length && segments[i].group === g) i++;
+                const end = i - 1;
+                if (end > start) { // Only treat as group if 2+ segments
+                    for (let j = start; j <= end; j++) {
+                        map[j] = { start, end };
+                    }
+                }
+            } else {
+                i++;
+            }
+        }
+        return map;
+    }
+
+    // Render a single segment's inner HTML
+    function renderSegmentInner(seg, index, isGroupCont) {
+        const startStr = formatTime(seg.start);
+        const startClass = isGroupCont ? 'seg-start group-cont' : 'seg-start';
+        let html = `<div class="${startClass}">${startStr}</div>`;
+        html += `<div class="character">${escapeHtml(seg.character || '')}</div>`;
+        html += `<div class="texts">`;
+        if (seg.direction) {
+            html += `<div class="direction-text">${escapeHtml(seg.direction)}</div>`;
+        } else {
+            html += `<div class="text">${escapeHtml(seg.text || '')}</div>`;
+            html += `<div class="translation">${escapeHtml(seg.translation || '')}</div>`;
+        }
+        html += `</div>`;
+        return html;
+    }
+
     // Render the libretto for a matched track
     function renderTrack(track) {
         const container = document.getElementById('libretto');
         if (!track || !track.segments || track.segments.length === 0) {
             container.innerHTML = '<div id="no-track">No libretto segments for this track</div>';
+            segmentGroupMap = [];
             return;
         }
 
+        segmentGroupMap = buildGroupMap(track.segments);
+
         let html = '';
-        for (let i = 0; i < track.segments.length; i++) {
-            const seg = track.segments[i];
-            const startStr = formatTime(seg.start);
-            html += `<div class="segment future" data-index="${i}" id="seg-${i}">`;
-            html += `<div class="seg-start">${startStr}</div>`;
-            html += `<div class="character">${escapeHtml(seg.character || '')}</div>`;
-            html += `<div class="texts">`;
-            if (seg.text) html += `<div class="text">${escapeHtml(seg.text)}</div>`;
-            if (seg.translation) html += `<div class="translation">${escapeHtml(seg.translation)}</div>`;
-            html += `</div></div>`;
+        let i = 0;
+        while (i < track.segments.length) {
+            const grp = segmentGroupMap[i];
+            if (grp && i === grp.start) {
+                // Render ensemble group container
+                html += `<div class="ensemble-group future" id="group-${grp.start}">`;
+                for (let j = grp.start; j <= grp.end; j++) {
+                    const seg = track.segments[j];
+                    const isGroupCont = j > grp.start;
+                    html += `<div class="segment future" data-index="${j}" id="seg-${j}">`;
+                    html += renderSegmentInner(seg, j, isGroupCont);
+                    html += `</div>`;
+                }
+                html += `</div>`;
+                i = grp.end + 1;
+            } else {
+                const seg = track.segments[i];
+                html += `<div class="segment future" data-index="${i}" id="seg-${i}">`;
+                html += renderSegmentInner(seg, i, false);
+                html += `</div>`;
+                i++;
+            }
         }
         container.innerHTML = html;
     }
@@ -2441,19 +2634,45 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         if (newIndex === currentSegmentIndex) return;
 
         currentSegmentIndex = newIndex;
-        const segments = document.querySelectorAll('.segment');
-        segments.forEach((el, i) => {
+
+        // Determine the active range (expanded to full group if in a group)
+        const grp = segmentGroupMap[newIndex];
+        const activeStart = grp ? grp.start : newIndex;
+        const activeEnd = grp ? grp.end : newIndex;
+
+        // Update individual segment classes
+        const segments = document.querySelectorAll('.segment[data-index]');
+        segments.forEach((el) => {
+            const i = parseInt(el.dataset.index);
             el.classList.remove('active', 'past', 'future');
-            if (i < newIndex) el.classList.add('past');
-            else if (i === newIndex) el.classList.add('active');
+            if (i < activeStart) el.classList.add('past');
+            else if (i >= activeStart && i <= activeEnd) el.classList.add('active');
             else el.classList.add('future');
         });
 
-        // Auto-scroll to active segment
+        // Update ensemble group container classes
+        document.querySelectorAll('.ensemble-group').forEach(el => {
+            el.classList.remove('active', 'past', 'future');
+            // Determine group state from its first child segment
+            const firstSeg = el.querySelector('.segment[data-index]');
+            if (firstSeg) {
+                const gi = parseInt(firstSeg.dataset.index);
+                const gInfo = segmentGroupMap[gi];
+                if (gInfo) {
+                    if (gInfo.end < activeStart) el.classList.add('past');
+                    else if (gInfo.start > activeEnd) el.classList.add('future');
+                    else el.classList.add('active');
+                }
+            }
+        });
+
+        // Auto-scroll: target the group container if in a group, else the segment
         if (autoScroll && newIndex >= 0) {
-            const activeEl = document.getElementById(`seg-${newIndex}`);
-            if (activeEl) {
-                activeEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+            const scrollTarget = grp
+                ? document.getElementById(`group-${grp.start}`)
+                : document.getElementById(`seg-${newIndex}`);
+            if (scrollTarget) {
+                scrollTarget.scrollIntoView({ behavior: 'smooth', block: 'center' });
             }
         }
 
@@ -2465,9 +2684,8 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     }
 
     // Handle zone data from /now-playing or WebSocket
-    function handleZoneUpdate(zones) {
+    async function handleZoneUpdate(zones) {
         nowPlayingZones = zones;
-        if (!librettoData) return;
 
         // Find first playing zone with a track
         const playing = zones.find(z => z.state === 'Playing' && z.track);
@@ -2478,6 +2696,45 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
 
         // Always show Roon track prominently
         document.getElementById('roon-track').textContent = playing.track;
+
+        // If server provides a libretto_match, use it to load the right file
+        if (playing.libretto_match) {
+            const lm = playing.libretto_match;
+            if (lm.file_id !== currentFileId) {
+                const data = await loadLibrettoByFileId(lm.file_id);
+                if (data) {
+                    librettoData = data;
+                    currentFileId = lm.file_id;
+                    updateLibrettoMeta(data);
+                }
+            }
+            // Use server-provided track_index for direct match
+            if (librettoData && lm.track_index != null) {
+                const matched = librettoData.tracks?.[lm.track_index];
+                if (matched && matched !== currentTrack) {
+                    currentTrack = matched;
+                    currentSegmentIndex = -1;
+                    trackLength = playing.length_seconds || currentTrack.duration_seconds || 0;
+
+                    const discTrack = currentTrack.disc_number
+                        ? `Disc ${currentTrack.disc_number}, Track ${currentTrack.track_number}`
+                        : `Track ${currentTrack.track_number || '?'}`;
+                    const method = lm.match_method || 'server';
+                    document.getElementById('matched-track').innerHTML =
+                        `<span class="label">Matched (${method}):</span> ${escapeHtml(currentTrack.title)} (${discTrack}, ${currentTrack.segments?.length || 0} segments)`;
+
+                    renderTrack(currentTrack);
+                }
+                if (playing.position_seconds != null) {
+                    seekPosition = playing.position_seconds;
+                    updateHighlight(seekPosition);
+                }
+                return;
+            }
+        }
+
+        // Fall back to client-side matching (single-file mode)
+        if (!librettoData) return;
 
         const matched = matchTrack(playing.track);
         if (matched && matched !== currentTrack) {
@@ -2584,10 +2841,18 @@ const ROUTES: &[(&str, &str, &str)] = &[
     ("POST", "/seek/:zone_id", "Seek to position in current track"),
     ("POST", "/mute/:zone_id", "Toggle mute for a zone"),
     ("POST", "/play-from-queue/:zone_id", "Play a specific item from queue"),
+    ("GET", "/libretto", "Get loaded libretto JSON (single-file mode)"),
+    ("GET", "/librettos", "List all loaded libretto files (library mode)"),
+    ("GET", "/libretto/:file_id", "Get a specific libretto by file_id"),
+    ("GET", "/libretto-view", "Serve the libretto viewer page"),
 ];
 
 /// Start the web server
-pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_interval: u32, libretto_path: Option<String>) -> Result<(), Box<dyn std::error::Error>> {
+pub async fn start_server(client: Arc<Mutex<RoonClient>>, config: crate::config::AppConfig) -> Result<(), Box<dyn std::error::Error>> {
+    let port = config.port;
+    let carousel_interval = config.carousel_interval;
+    let libretto_path = config.libretto.clone();
+
     // Start background dCS device discovery (non-blocking)
     // Discovery runs in background and notifies when complete
     crate::dcs::start_discovery();
@@ -2615,10 +2880,24 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_in
         None
     };
 
+    // Load libretto library from directory if configured
+    let lib = if let Some(dir) = &config.libretto_dir {
+        match library::LibrettoLibrary::from_directory(std::path::Path::new(dir)) {
+            Ok(lib) => Some(Arc::new(lib)),
+            Err(e) => {
+                log::error!("Failed to load libretto library from {}: {}", dir, e);
+                None
+            }
+        }
+    } else {
+        None
+    };
+
     let state = AppState {
         roon_client: client,
         carousel_interval_ms: carousel_interval * 1000, // Convert seconds to milliseconds
         libretto_json,
+        library: lib,
     };
 
     let app = Router::new()
@@ -2636,6 +2915,8 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_in
         .route("/mute/:zone_id", post(mute_handler))
         .route("/play-from-queue/:zone_id", post(play_from_queue_handler))
         .route("/libretto", get(libretto_handler))
+        .route("/librettos", get(librettos_handler))
+        .route("/libretto/:file_id", get(libretto_by_id_handler))
         .route("/libretto-view", get(libretto_view_handler))
         .layer(CorsLayer::permissive())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
@@ -2658,6 +2939,9 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, port: u16, carousel_in
     }
     if libretto_path.is_some() {
         println!("  Libretto: http://localhost:{}/libretto-view", port);
+    }
+    if let Some(dir) = &config.libretto_dir {
+        println!("  Libretto dir: {}", dir);
     }
     println!("\nAPI endpoints:");
 
@@ -2682,7 +2966,7 @@ async fn spa_handler(State(state): State<AppState>) -> Html<String> {
     Html(html)
 }
 
-/// Serve the timed interchange libretto JSON
+/// Serve the timed interchange libretto JSON (legacy single-file mode)
 async fn libretto_handler(State(state): State<AppState>) -> Response {
     match &state.libretto_json {
         Some(json) => Json(json.as_ref().clone()).into_response(),
@@ -2690,10 +2974,42 @@ async fn libretto_handler(State(state): State<AppState>) -> Response {
     }
 }
 
+/// List all loaded libretto files in the library
+async fn librettos_handler(State(state): State<AppState>) -> Response {
+    match &state.library {
+        Some(lib) => {
+            let summaries = lib.list_files();
+            Json(serde_json::json!({
+                "files": summaries,
+                "count": summaries.len(),
+            })).into_response()
+        }
+        None => Json(serde_json::json!({
+            "files": [],
+            "count": 0,
+        })).into_response(),
+    }
+}
+
+/// Serve a specific libretto file by its file_id
+async fn libretto_by_id_handler(
+    State(state): State<AppState>,
+    Path(file_id): Path<String>,
+) -> Response {
+    if let Some(lib) = &state.library {
+        if let Some(loaded) = lib.librettos.get(&file_id) {
+            return Json(loaded.json.as_ref().clone()).into_response();
+        }
+    }
+    (StatusCode::NOT_FOUND, format!("Libretto '{}' not found", file_id)).into_response()
+}
+
 /// Serve the libretto viewer page
 async fn libretto_view_handler(State(state): State<AppState>) -> Response {
-    if state.libretto_json.is_none() {
-        return (StatusCode::NOT_FOUND, Html("<h1>No libretto loaded</h1><p>Start the server with --libretto &lt;path&gt;</p>".to_string())).into_response();
+    let has_libretto = state.libretto_json.is_some()
+        || state.library.as_ref().map_or(false, |lib| !lib.librettos.is_empty());
+    if !has_libretto {
+        return (StatusCode::NOT_FOUND, Html("<h1>No libretto loaded</h1><p>Start the server with --libretto &lt;path&gt; or --libretto-dir &lt;dir&gt;</p>".to_string())).into_response();
     }
     Html(LIBRETTO_VIEW_HTML.to_string()).into_response()
 }

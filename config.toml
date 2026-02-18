@@ -1,0 +1,18 @@
+# roon-rd configuration
+# Copy to ~/.config/roon-rd/config.toml for system-wide use,
+# or pass with --config ./config.toml for development.
+#
+# Precedence (lowest → highest):
+#   1. Code defaults
+#   2. This config file
+#   3. Environment variables (ROON_RD__PORT, ROON_RD__LIBRETTO_DIR, etc.)
+#   4. CLI arguments (--port, --libretto-dir, etc.)
+
+# HTTP server port
+port = 3000
+
+# Now-playing carousel rotation interval (seconds)
+carousel_interval = 30
+
+# Directory containing *.interchange.json libretto files
+libretto_dir = "/Users/jdr/Dropbox/Development/rust/libretto-scratch/working/librettos"
