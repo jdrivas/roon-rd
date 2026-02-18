@@ -118,11 +118,14 @@ pub fn load_config(
 
     let config: AppConfig = figment.extract()?;
 
-    // Log config file location
+    // Log config file location (resolve to absolute path for clarity)
+    let display_path = std::fs::canonicalize(&config_file)
+        .unwrap_or_else(|_| std::path::absolute(&config_file)
+            .unwrap_or_else(|_| config_file.clone()));
     if config_file.exists() {
-        log::info!("Config file: {}", config_file.display());
+        log::info!("Config file: {}", display_path.display());
     } else {
-        log::info!("Config file: {} (not found, using defaults)", config_file.display());
+        log::info!("Config file: {} (not found, using defaults)", display_path.display());
     }
 
     // Log each config value with its provenance
