@@ -190,19 +190,40 @@ impl LibrettoLibrary {
         disc_number: Option<u32>,
         track_number: Option<u32>,
     ) -> Option<TrackMatch> {
+        log::debug!("match_track: album={:?}, title={:?}, disc={:?}, track_num={:?}",
+            album, track_title, disc_number, track_number);
+
         // Step 1: Find candidate files by album name
         let normalized_album = album.map(normalize_album);
-        let candidate_file_ids: Vec<&str> = if let Some(ref norm) = normalized_album {
-            self.album_index
+        let mut candidate_file_ids: Vec<&str> = if let Some(ref norm) = normalized_album {
+            // Try exact match first
+            let exact = self.album_index
                 .get(norm)
-                .map(|entries| entries.iter().map(|e| e.file_id.as_str()).collect())
-                .unwrap_or_default()
+                .map(|entries| entries.iter().map(|e| e.file_id.as_str()).collect::<Vec<_>>())
+                .unwrap_or_default();
+            if !exact.is_empty() {
+                log::debug!("  album exact match: {:?} -> {:?}", norm, exact);
+                exact
+            } else {
+                // Fuzzy: check if the Roon album contains or is contained by an indexed album
+                let fuzzy: Vec<&str> = self.album_index.iter()
+                    .filter(|(indexed, _)| norm.contains(indexed.as_str()) || indexed.contains(norm.as_str()))
+                    .flat_map(|(_, entries)| entries.iter().map(|e| e.file_id.as_str()))
+                    .collect();
+                if !fuzzy.is_empty() {
+                    log::debug!("  album fuzzy match: {:?} -> {:?}", norm, fuzzy);
+                }
+                fuzzy
+            }
         } else {
             // No album info — try all files
             self.librettos.keys().map(|s| s.as_str()).collect()
         };
+        candidate_file_ids.dedup();
 
         if candidate_file_ids.is_empty() {
+            log::debug!("  no album candidates found; index keys: {:?}",
+                self.album_index.keys().collect::<Vec<_>>());
             return None;
         }
 
@@ -244,9 +265,7 @@ impl LibrettoLibrary {
             }
         }
 
-        // Step 3: If album match found a file but no track, return the file
-        // with track_index 0 (for the SPA to handle track matching client-side)
-        // Actually, let's not — returning None is more honest
+        log::debug!("  no track match found in {} candidate file(s)", candidate_file_ids.len());
         None
     }
 
