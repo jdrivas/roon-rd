@@ -165,7 +165,10 @@ use tokio::sync::{Notify, RwLock};
 struct DcsCache {
     devices: RwLock<Vec<DcsDevice>>,
     ready: Notify,
+    /// True once at least one discovery cycle has completed (success or empty).
     initialized: std::sync::atomic::AtomicBool,
+    /// True once the background discovery loop has been spawned (prevents double-spawn).
+    started: std::sync::atomic::AtomicBool,
 }
 
 impl DcsCache {
@@ -174,15 +177,29 @@ impl DcsCache {
             devices: RwLock::new(Vec::new()),
             ready: Notify::new(),
             initialized: std::sync::atomic::AtomicBool::new(false),
+            started: std::sync::atomic::AtomicBool::new(false),
         }
     }
-    
+
     fn is_initialized(&self) -> bool {
         self.initialized.load(std::sync::atomic::Ordering::Acquire)
     }
-    
+
     fn mark_initialized(&self) {
         self.initialized.store(true, std::sync::atomic::Ordering::Release);
+    }
+
+    /// Atomically claim the right to spawn the background discovery loop.
+    /// Returns true for exactly one caller; subsequent callers get false.
+    fn try_claim_start(&self) -> bool {
+        self.started
+            .compare_exchange(
+                false,
+                true,
+                std::sync::atomic::Ordering::AcqRel,
+                std::sync::atomic::Ordering::Acquire,
+            )
+            .is_ok()
     }
 }
 
@@ -192,35 +209,75 @@ fn get_cache() -> &'static DcsCache {
     DEVICE_CACHE.get_or_init(DcsCache::new)
 }
 
-/// Start background dCS device discovery
-/// Call this at server startup - discovery runs async and notifies when complete
+/// Browse window for a single discovery pass. Longer than the original 3s
+/// because a cold mDNS cache often doesn't deliver `ServiceResolved` in time.
+const DISCOVERY_TIMEOUT_SECS: u64 = 5;
+/// How often to re-run discovery while we still have *no* devices (fast retry,
+/// so a missed device at startup self-heals quickly).
+const RETRY_INTERVAL_SECS: u64 = 30;
+/// How often to re-run discovery once we *have* devices (slow refresh, to pick
+/// up new devices, removals, or IP changes without hammering the network).
+const REFRESH_INTERVAL_SECS: u64 = 300;
+
+/// Start background dCS device discovery.
+///
+/// Call this at server startup. Discovery runs in a self-healing background
+/// loop: it keeps retrying quickly until at least one device is found, then
+/// settles into a slow periodic refresh. A transient empty result never
+/// clobbers a previously-discovered device — the cache only shrinks when a
+/// later pass still succeeds but the device is genuinely gone.
 pub fn start_discovery() {
     let cache = get_cache();
-    
-    // Don't restart if already initialized
-    if cache.is_initialized() {
-        log::debug!("dCS cache already initialized, skipping discovery");
+
+    // Ensure the loop is spawned exactly once for the process lifetime.
+    if !cache.try_claim_start() {
+        log::debug!("dCS discovery loop already running, skipping");
         return;
     }
-    
-    log::info!("Starting background dCS device discovery...");
-    
-    // Spawn async discovery task
+
+    log::info!("Starting background dCS device discovery loop...");
+
     tokio::spawn(async move {
-        let devices = discover_devices(3).await.unwrap_or_else(|e| {
-            log::warn!("Failed to discover dCS devices: {}", e);
-            Vec::new()
-        });
-        
         let cache = get_cache();
-        let mut cache_devices = cache.devices.write().await;
-        *cache_devices = devices;
-        let count = cache_devices.len();
-        drop(cache_devices);
-        
-        cache.mark_initialized();
-        cache.ready.notify_waiters();
-        log::info!("dCS cache ready with {} device(s)", count);
+        let mut first_cycle = true;
+
+        loop {
+            match discover_devices(DISCOVERY_TIMEOUT_SECS).await {
+                Ok(devices) if !devices.is_empty() => {
+                    let mut guard = cache.devices.write().await;
+                    *guard = devices;
+                    let count = guard.len();
+                    drop(guard);
+                    log::info!("dCS cache updated: {} device(s)", count);
+                }
+                Ok(_) => {
+                    // No devices resolved this pass. Keep whatever we already
+                    // have rather than wiping a known device on a transient miss.
+                    let have = cache.devices.read().await.len();
+                    if have > 0 {
+                        log::debug!("dCS discovery found none this pass; keeping {} cached device(s)", have);
+                    } else {
+                        log::debug!("dCS discovery found no devices yet; will retry");
+                    }
+                }
+                Err(e) => {
+                    log::warn!("dCS discovery error: {} (keeping existing cache)", e);
+                }
+            }
+
+            // After the first completed pass, mark initialized so waiters and
+            // sync readers can proceed even if nothing was found.
+            if first_cycle {
+                cache.mark_initialized();
+                cache.ready.notify_waiters();
+                first_cycle = false;
+            }
+
+            // Retry quickly while we have nothing; refresh slowly once we do.
+            let have_devices = !cache.devices.read().await.is_empty();
+            let sleep_secs = if have_devices { REFRESH_INTERVAL_SECS } else { RETRY_INTERVAL_SECS };
+            tokio::time::sleep(Duration::from_secs(sleep_secs)).await;
+        }
     });
 }
 
@@ -283,41 +340,56 @@ pub fn get_cached_devices_sync() -> Vec<DcsDevice> {
     }
 }
 
-/// Find a dCS device that matches a Roon zone name
-/// 
-/// Matches zone names like "dCS Vivaldi Upsampler" to devices with unit_type "Vivaldi Upsampler"
-/// or zone names containing "Network Bridge" to devices with that unit type.
-pub fn find_device_for_zone(zone_name: &str) -> Option<DcsDevice> {
-    let devices = get_cached_devices_sync();
-    
-    log::debug!("find_device_for_zone: looking for zone '{}' in {} cached devices", 
-               zone_name, devices.len());
-    
-    // Try to match zone name to device unit_type or name
-    for device in &devices {
-        log::trace!("  Checking device '{}' (unit_type: '{}')", device.name, device.unit_type);
-        // Check if zone name contains the device's unit type (e.g., "Vivaldi Upsampler", "Network Bridge")
-        if zone_name.contains(&device.unit_type) {
-            log::debug!("Matched zone '{}' to dCS device '{}' ({})", 
-                       zone_name, device.name, device.unit_type);
-            return Some(device.clone());
-        }
-        
-        // Also check if zone name starts with "dCS" and contains part of the device name
-        if zone_name.starts_with("dCS") {
-            // Extract key words from device name for matching
-            let name_parts: Vec<&str> = device.name.split_whitespace().collect();
-            for part in name_parts {
-                if part.len() > 3 && zone_name.contains(part) {
-                    log::debug!("Matched zone '{}' to dCS device '{}' via name part '{}'", 
-                               zone_name, device.name, part);
-                    return Some(device.clone());
-                }
+/// Test whether a single candidate name identifies the given dCS device.
+///
+/// A Roon zone exposes several names that may identify the device: the zone's
+/// own `display_name` (e.g. "Living Room dCS") and the selected source-control
+/// `display_name` (e.g. "dCS Vivaldi Upsampler"). The zone name is often
+/// generic, so the source-control name is usually what actually matches.
+fn device_matches_name(device: &DcsDevice, name: &str) -> bool {
+    // Device's unit type as a substring, e.g. "Vivaldi Upsampler", "Network Bridge".
+    if !device.unit_type.is_empty() && name.contains(&device.unit_type) {
+        return true;
+    }
+    // Device's full friendly name as a substring, e.g. "dCS Vivaldi Upsampler".
+    if !device.name.is_empty() && name.contains(&device.name) {
+        return true;
+    }
+    // Name mentions "dCS" and shares a significant word with the device name.
+    if name.contains("dCS") {
+        for part in device.name.split_whitespace() {
+            if part.len() > 3 && part != "dCS" && name.contains(part) {
+                return true;
             }
         }
     }
-    
-    log::debug!("No dCS device match found for zone '{}'", zone_name);
+    false
+}
+
+/// Find a dCS device that matches any of the given candidate names for a zone.
+///
+/// Pass every name that might identify the device — the Roon zone display name
+/// *and* the selected source-control display name (see [`device_matches_name`]).
+/// Matching is tried device-by-device, candidate-by-candidate, and the first
+/// match wins.
+pub fn find_device_for_zone(candidate_names: &[&str]) -> Option<DcsDevice> {
+    let devices = get_cached_devices_sync();
+
+    log::debug!("find_device_for_zone: matching {:?} against {} cached device(s)",
+               candidate_names, devices.len());
+
+    for device in &devices {
+        log::trace!("  Checking device '{}' (unit_type: '{}')", device.name, device.unit_type);
+        for name in candidate_names {
+            if device_matches_name(device, name) {
+                log::debug!("Matched zone candidate '{}' to dCS device '{}' ({})",
+                           name, device.name, device.unit_type);
+                return Some(device.clone());
+            }
+        }
+    }
+
+    log::debug!("No dCS device match found for candidates {:?}", candidate_names);
     None
 }
 
@@ -807,5 +879,68 @@ pub async fn set_display_off(host: &str, off: bool) -> Result<(), Box<dyn Error>
     } else {
         log::debug!("dCS display off set failed: {}", text);
         Err(format!("Failed to set display off: {}", text).into())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn vivaldi() -> DcsDevice {
+        DcsDevice {
+            name: "dCS Vivaldi Upsampler".to_string(),
+            unit_type: "Vivaldi Upsampler".to_string(),
+            uuid: "Vivaldi-68c90b2ddc26".to_string(),
+            hostname: "dcs-vivaldi.local".to_string(),
+            ip: Some("192.168.50.31".to_string()),
+            port: 80,
+            manufacturer: Some("Data Conversion Systems Ltd".to_string()),
+        }
+    }
+
+    #[test]
+    fn matches_unit_type_substring() {
+        // Zone named after the device's source control / unit type.
+        assert!(device_matches_name(&vivaldi(), "dCS Vivaldi Upsampler"));
+        assert!(device_matches_name(&vivaldi(), "Vivaldi Upsampler"));
+    }
+
+    #[test]
+    fn generic_zone_name_alone_does_not_match() {
+        // A zone literally named "Living Room dCS" should NOT match on its own —
+        // it doesn't contain the unit type and doesn't start with "dCS".
+        assert!(!device_matches_name(&vivaldi(), "Living Room dCS"));
+    }
+
+    #[test]
+    fn finds_device_via_source_control_candidate() {
+        // The real-world case: zone display name is generic, but the selected
+        // source-control name ("dCS Vivaldi Upsampler") identifies the device.
+        // Note: this exercises matching only; get_cached_devices_sync() is empty
+        // in tests, so we test device_matches_name across the candidate set.
+        let candidates = ["Living Room dCS", "dCS Vivaldi Upsampler"];
+        let dev = vivaldi();
+        assert!(candidates.iter().any(|n| device_matches_name(&dev, n)));
+    }
+
+    #[test]
+    fn unrelated_zone_does_not_match() {
+        assert!(!device_matches_name(&vivaldi(), "Oldara Player"));
+        assert!(!device_matches_name(&vivaldi(), "Kitchen Sonos"));
+    }
+
+    #[test]
+    fn network_bridge_matches_by_unit_type() {
+        let bridge = DcsDevice {
+            name: "dCS Network Bridge".to_string(),
+            unit_type: "Network Bridge".to_string(),
+            uuid: "Bridge-abc".to_string(),
+            hostname: "dcs-bridge.local".to_string(),
+            ip: None,
+            port: 80,
+            manufacturer: None,
+        };
+        assert!(device_matches_name(&bridge, "Study Network Bridge"));
+        assert!(!device_matches_name(&bridge, "Study"));
     }
 }

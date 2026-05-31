@@ -97,6 +97,23 @@ const DCS_UPDATE_DELAY_MS: u64 = 200;
 /// If another event arrives within this window, the stop is cancelled
 const STOP_BROADCAST_DELAY_MS: u64 = 500;
 
+/// Collect the names that might identify a dCS device for a zone.
+///
+/// Includes the zone's own `display_name` (often generic, e.g. "Living Room dCS")
+/// plus every source-control `display_name` (e.g. "dCS Vivaldi Upsampler"), which
+/// is usually what actually matches a discovered device's unit type or name.
+fn dcs_match_candidates(zone: &Zone) -> Vec<String> {
+    let mut names = vec![zone.display_name.clone()];
+    for output in &zone.outputs {
+        if let Some(source_controls) = &output.source_controls {
+            for sc in source_controls {
+                names.push(sc.display_name.clone());
+            }
+        }
+    }
+    names
+}
+
 /// Build WebSocket zone data from zones Arc (standalone function for use in event handlers)
 /// Returns both the simplified WsZoneData, the raw Zones from Roon, and the raw JSON string
 async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>, zones_raw_json: Arc<RwLock<Option<String>>>) -> (Vec<WsZoneData>, Vec<Zone>, Option<String>) {
@@ -116,7 +133,9 @@ async fn build_ws_zone_data_from_zones(zones: Arc<RwLock<HashMap<String, Zone>>>
             log::debug!("Processing zone: {} ({}), state: {}", zone_name, zone_id, zone_state);
 
             // Fetch dCS format on-demand if this zone matches a discovered dCS device and is Playing
-            let dcs_format = if let Some(dcs_device) = dcs::find_device_for_zone(&zone.display_name) {
+            let dcs_candidates = dcs_match_candidates(&zone);
+            let dcs_candidate_refs: Vec<&str> = dcs_candidates.iter().map(|s| s.as_str()).collect();
+            let dcs_format = if let Some(dcs_device) = dcs::find_device_for_zone(&dcs_candidate_refs) {
                 if format!("{:?}", zone.state).to_lowercase() == "playing" {
                     log::debug!("Zone {} matched dCS device {} at {}, fetching format...", 
                                zone_name, dcs_device.name, dcs_device.host());
@@ -867,7 +886,9 @@ impl RoonClient {
         let zone_futures: Vec<_> = zones.into_iter().map(|zone| {
             async move {
                 // Fetch dCS format on-demand if this zone matches a discovered dCS device and is Playing
-                let dcs_format = if let Some(dcs_device) = dcs::find_device_for_zone(&zone.display_name) {
+                let dcs_candidates = dcs_match_candidates(&zone);
+                let dcs_candidate_refs: Vec<&str> = dcs_candidates.iter().map(|s| s.as_str()).collect();
+                let dcs_format = if let Some(dcs_device) = dcs::find_device_for_zone(&dcs_candidate_refs) {
                     if format!("{:?}", zone.state).to_lowercase() == "playing" {
                         match dcs::get_playback_info(&dcs_device.host()).await {
                             Ok(playback_info) => {
