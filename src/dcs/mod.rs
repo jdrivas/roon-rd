@@ -149,8 +149,28 @@ pub async fn discover_devices(timeout_secs: u64) -> Result<Vec<DcsDevice>, Box<d
         }
     }
 
-    // Stop browsing
+    // Stop browsing, then fully shut down the daemon.
+    //
+    // CRITICAL: ServiceDaemon is a cloneable Arc-style handle with no Drop impl,
+    // so simply dropping `mdns` does NOT stop its background thread or close its
+    // per-interface UDP sockets. Since discovery runs on a periodic loop, failing
+    // to shut down here leaks file descriptors every cycle and eventually causes
+    // "Too many open files (os error 24)". shutdown() sends Command::Exit, which
+    // makes the daemon close its sockets and terminate.
     let _ = mdns.stop_browse(DCS_SERVICE_TYPE);
+    match mdns.shutdown() {
+        Ok(status_rx) => {
+            // Await confirmation (async, non-blocking) so sockets are released
+            // before we return. Bounded by a short timeout so a stuck daemon
+            // can't hang the discovery loop.
+            match tokio::time::timeout(Duration::from_secs(2), status_rx.recv_async()).await {
+                Ok(Ok(status)) => log::debug!("dCS mDNS daemon shut down: {:?}", status),
+                Ok(Err(_)) => log::debug!("dCS mDNS daemon shutdown channel closed early"),
+                Err(_) => log::debug!("dCS mDNS daemon shutdown confirmation timed out (continuing)"),
+            }
+        }
+        Err(e) => log::warn!("Failed to shut down dCS mDNS daemon: {}", e),
+    }
 
     let result: Vec<DcsDevice> = devices.into_values().collect();
     log::info!("dCS discovery complete: found {} device(s)", result.len());
@@ -885,6 +905,45 @@ pub async fn set_display_off(host: &str, off: bool) -> Result<(), Box<dyn Error>
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Count this process's currently-open file descriptors (macOS/Linux).
+    fn open_fd_count() -> usize {
+        std::fs::read_dir("/dev/fd")
+            .map(|rd| rd.count())
+            .unwrap_or(0)
+    }
+
+    /// Regression test for the "Too many open files" FD leak: each
+    /// `discover_devices` call must fully shut down its mDNS daemon, so running
+    /// discovery repeatedly must not grow the process's open-FD count.
+    ///
+    /// Ignored by default because it touches the network and timing. Run with:
+    ///   cargo test --bin roon-rd dcs::tests::discovery_does_not_leak_fds -- --ignored --nocapture
+    #[tokio::test]
+    #[ignore]
+    async fn discovery_does_not_leak_fds() {
+        // Warm-up pass so any one-time allocations are already counted.
+        let _ = discover_devices(1).await;
+        let baseline = open_fd_count();
+
+        for i in 0..6 {
+            let _ = discover_devices(1).await;
+            // Give the daemon thread a moment to finish closing sockets.
+            tokio::time::sleep(Duration::from_millis(200)).await;
+            println!("after cycle {}: open fds = {}", i + 1, open_fd_count());
+        }
+
+        let after = open_fd_count();
+        let growth = after.saturating_sub(baseline);
+        println!("fd baseline={} after={} growth={}", baseline, after, growth);
+        // Each leaked daemon would add several UDP sockets per interface; a fixed
+        // small slack tolerates unrelated churn while still catching a real leak.
+        assert!(
+            growth <= 4,
+            "FD count grew by {} across 6 discovery cycles (baseline {}, after {}) — daemon not being shut down",
+            growth, baseline, after
+        );
+    }
 
     fn vivaldi() -> DcsDevice {
         DcsDevice {
