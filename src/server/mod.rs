@@ -2118,6 +2118,7 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
                                         zone.track.as_deref(),
                                         None, // disc_number not in WsZoneData yet
                                         None, // track_number not in WsZoneData yet
+                                        zone.length_seconds.map(f64::from), // tells recordings apart
                                     );
 
                                     // Build a dedup key: "file_id:track_index" or "none"

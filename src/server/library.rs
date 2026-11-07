@@ -244,31 +244,47 @@ impl LibrettoLibrary {
         disc_number: Option<u32>,
         track_number: Option<u32>,
     ) -> Option<TrackMatch> {
-        log::debug!("match_track: album={:?}, title={:?}, disc={:?}, track_num={:?}",
-            album, track_title, disc_number, track_number);
+        self.match_track_with_length(album, track_title, disc_number, track_number, None)
+    }
 
-        // Step 1: Find candidate files by album name
+    /// Like `match_track`, but when several files match (e.g. two recordings of the same
+    /// opera whose album names and track titles look alike), picks the one whose track
+    /// duration is closest to the playing track's length. Without a length, or when only
+    /// one file matches, the first match wins (exact album matches before fuzzy ones).
+    pub fn match_track_with_length(
+        &self,
+        album: Option<&str>,
+        track_title: Option<&str>,
+        disc_number: Option<u32>,
+        track_number: Option<u32>,
+        length_seconds: Option<f64>,
+    ) -> Option<TrackMatch> {
+        log::debug!("match_track: album={:?}, title={:?}, disc={:?}, track_num={:?}, length={:?}",
+            album, track_title, disc_number, track_number, length_seconds);
+
+        // Step 1: Find candidate files by album name: exact matches first, then fuzzy ones
+        // (the Roon album contains, or is contained by, an indexed album name).
         let normalized_album = album.map(normalize_album);
         let mut candidate_file_ids: Vec<&str> = if let Some(ref norm) = normalized_album {
-            // Try exact match first
             let exact = self.album_index
                 .get(norm)
                 .map(|entries| entries.iter().map(|e| e.file_id.as_str()).collect::<Vec<_>>())
                 .unwrap_or_default();
-            if !exact.is_empty() {
-                log::debug!("  album exact match: {:?} -> {:?}", norm, exact);
-                exact
-            } else {
-                // Fuzzy: check if the Roon album contains or is contained by an indexed album
-                let fuzzy: Vec<&str> = self.album_index.iter()
-                    .filter(|(indexed, _)| norm.contains(indexed.as_str()) || indexed.contains(norm.as_str()))
-                    .flat_map(|(_, entries)| entries.iter().map(|e| e.file_id.as_str()))
-                    .collect();
-                if !fuzzy.is_empty() {
-                    log::debug!("  album fuzzy match: {:?} -> {:?}", norm, fuzzy);
-                }
-                fuzzy
+            let fuzzy: Vec<&str> = self.album_index.iter()
+                .filter(|(indexed, _)| indexed.as_str() != norm
+                    && (norm.contains(indexed.as_str()) || indexed.contains(norm.as_str())))
+                .flat_map(|(_, entries)| entries.iter().map(|e| e.file_id.as_str()))
+                .collect();
+            if !exact.is_empty() || !fuzzy.is_empty() {
+                log::debug!("  album match: {:?} -> exact {:?}, fuzzy {:?}", norm, exact, fuzzy);
             }
+            let mut ids = exact;
+            for id in fuzzy {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            ids
         } else {
             // No album info — try all files
             self.librettos.keys().map(|s| s.as_str()).collect()
@@ -285,59 +301,95 @@ impl LibrettoLibrary {
             candidate_file_ids = self.librettos.keys().map(|s| s.as_str()).collect();
         }
 
-        // Step 2: Within candidate files, find the best track match
+        // Step 2: Within each candidate file, find its best track match.
+        let mut found: Vec<TrackMatch> = Vec::new();
         for file_id in &candidate_file_ids {
-            if let Some(libretto) = self.librettos.get(*file_id) {
-                if let Some(tracks) = libretto.json.get("tracks").and_then(|t| t.as_array()) {
-                    // Try disc_number + track_number match first (most reliable)
-                    // but ONLY if album was matched — disc/track numbers are ambiguous across operas
-                    if album_matched {
-                        if let (Some(disc), Some(track_num)) = (disc_number, track_number) {
-                            for (i, track) in tracks.iter().enumerate() {
-                                let t_disc = track.get("disc_number").and_then(|d| d.as_u64()).map(|d| d as u32);
-                                let t_num = track.get("track_number").and_then(|n| n.as_u64()).map(|n| n as u32);
-                                if t_disc == Some(disc) && t_num == Some(track_num) {
-                                    return Some(TrackMatch {
-                                        file_id: file_id.to_string(),
-                                        track_index: i,
-                                        match_method: MatchMethod::AlbumAndNumber,
-                                    });
-                                }
-                            }
-                        }
-                    }
+            if let Some(m) = self.match_in_file(file_id, album_matched, track_title, disc_number, track_number) {
+                if length_seconds.is_none() {
+                    return Some(m);  // no way to tell recordings apart: first match wins
+                }
+                found.push(m);
+            }
+        }
+        if found.is_empty() {
+            log::debug!("  no track match found in {} candidate file(s)", candidate_file_ids.len());
+            return None;
+        }
 
-                    // Title matching using parsed title structure (scored, picks best)
-                    if let Some(title) = track_title {
-                        let roon_parsed = parse_roon_title(title);
-                        let mut best_score = 0u32;
-                        let mut best_index = None;
-                        for (i, track) in tracks.iter().enumerate() {
-                            if let Some(t_title) = track.get("title").and_then(|t| t.as_str()) {
-                                let ic_parsed = parse_ic_title(t_title);
-                                if let Some(score) = parsed_titles_match(&roon_parsed, &ic_parsed) {
-                                    if score > best_score {
-                                        best_score = score;
-                                        best_index = Some(i);
-                                    }
-                                }
-                            }
-                        }
-                        if let Some(idx) = best_index {
-                            log::debug!("  title match: file={} track={} score={}", file_id, idx, best_score);
-                            return Some(TrackMatch {
-                                file_id: file_id.to_string(),
-                                track_index: idx,
-                                match_method: MatchMethod::AlbumAndTitle,
-                            });
-                        }
+        // Step 3: Several files match: prefer the track whose duration is closest to the
+        // playing track's length (files without a duration rank last).
+        if found.len() > 1 {
+            let len = length_seconds.unwrap_or_default();
+            let gap = |m: &TrackMatch| self.track_duration(m).map(|d| (d - len).abs()).unwrap_or(f64::MAX);
+            let best = found.iter()
+                .min_by(|a, b| gap(a).partial_cmp(&gap(b)).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned()?;
+            log::info!("Libretto: {} files match {:?}; chose {} by track length ({:.0} s vs {:.0} s)",
+                found.len(), track_title.unwrap_or(""), best.file_id,
+                self.track_duration(&best).unwrap_or(f64::NAN), len);
+            return Some(best);
+        }
+        found.into_iter().next()
+    }
+
+    /// Duration (seconds) of a matched track, from its interchange `duration_seconds`.
+    fn track_duration(&self, m: &TrackMatch) -> Option<f64> {
+        self.librettos.get(&m.file_id)?
+            .json.get("tracks")?.as_array()?
+            .get(m.track_index)?
+            .get("duration_seconds")?.as_f64()
+    }
+
+    /// Best track match within one file: disc + track number (only when the album matched,
+    /// since numbers are ambiguous across operas), else scored title matching.
+    fn match_in_file(
+        &self,
+        file_id: &str,
+        album_matched: bool,
+        track_title: Option<&str>,
+        disc_number: Option<u32>,
+        track_number: Option<u32>,
+    ) -> Option<TrackMatch> {
+        let tracks = self.librettos.get(file_id)?.json.get("tracks")?.as_array()?;
+        if album_matched {
+            if let (Some(disc), Some(track_num)) = (disc_number, track_number) {
+                for (i, track) in tracks.iter().enumerate() {
+                    let t_disc = track.get("disc_number").and_then(|d| d.as_u64()).map(|d| d as u32);
+                    let t_num = track.get("track_number").and_then(|n| n.as_u64()).map(|n| n as u32);
+                    if t_disc == Some(disc) && t_num == Some(track_num) {
+                        return Some(TrackMatch {
+                            file_id: file_id.to_string(),
+                            track_index: i,
+                            match_method: MatchMethod::AlbumAndNumber,
+                        });
                     }
                 }
             }
         }
 
-        log::debug!("  no track match found in {} candidate file(s)", candidate_file_ids.len());
-        None
+        // Title matching using parsed title structure (scored, picks best)
+        let title = track_title?;
+        let roon_parsed = parse_roon_title(title);
+        let mut best_score = 0u32;
+        let mut best_index = None;
+        for (i, track) in tracks.iter().enumerate() {
+            if let Some(t_title) = track.get("title").and_then(|t| t.as_str()) {
+                let ic_parsed = parse_ic_title(t_title);
+                if let Some(score) = parsed_titles_match(&roon_parsed, &ic_parsed) {
+                    if score > best_score {
+                        best_score = score;
+                        best_index = Some(i);
+                    }
+                }
+            }
+        }
+        let idx = best_index?;
+        log::debug!("  title match: file={} track={} score={}", file_id, idx, best_score);
+        Some(TrackMatch {
+            file_id: file_id.to_string(),
+            track_index: idx,
+            match_method: MatchMethod::AlbumAndTitle,
+        })
     }
 
     /// Extract the full libretto content for a matched track.
@@ -386,8 +438,9 @@ impl LibrettoLibrary {
         track_title: Option<&str>,
         disc_number: Option<u32>,
         track_number: Option<u32>,
+        length_seconds: Option<f64>,
     ) -> Option<LibrettoContent> {
-        let track_match = self.match_track(album, track_title, disc_number, track_number)?;
+        let track_match = self.match_track_with_length(album, track_title, disc_number, track_number, length_seconds)?;
         self.extract_track_content(&track_match)
     }
 
@@ -909,6 +962,39 @@ mod tests {
             .map(|s| s.strip_suffix(".interchange").unwrap_or(s).to_string())
             .unwrap();
         assert_eq!(file_id, "georg-solti-1981");
+    }
+
+    #[test]
+    fn test_two_recordings_told_apart_by_length() {
+        // Two recordings of the same opera: Roon reports an album name that exactly
+        // matches one file and fuzzily the other, and the titles share their text.
+        let dir = std::env::temp_dir().join("roon-rd-test-two-recordings");
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, album: &str, title: &str, dur: f64| {
+            std::fs::write(dir.join(format!("{name}.interchange.json")), format!(r#"{{
+                "version": "1.0",
+                "opera": {{ "title": "Le nozze di Figaro" }},
+                "recording": {{ "album_title": "{album}" }},
+                "tracks": [{{ "track_id": "t1", "title": "{title}", "duration_seconds": {dur},
+                              "segments": [{{ "start": 0.0, "text": "Riconosci" }}] }}]
+            }}"#)).unwrap();
+        };
+        write("solti", "Mozart: Le Nozze di Figaro",
+              "No. 19 Sestetto: Riconosci in questo amplesso", 393.0);
+        write("currentzis", "Mozart: Le nozze di Figaro, K. 492",
+              "Riconosci in questo amplesso (No. 19, Sestetto)", 342.6);
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let roon = (Some("Mozart: Le Nozze di Figaro"),
+                    Some("Le Nozze di Figaro: Act 3. Scene 5. No. 19 Sestetto: Riconosci in questo amplesso"));
+
+        let m = lib.match_track_with_length(roon.0, roon.1, None, None, Some(343.0)).unwrap();
+        assert_eq!(m.file_id, "currentzis");
+        let m = lib.match_track_with_length(roon.0, roon.1, None, None, Some(393.0)).unwrap();
+        assert_eq!(m.file_id, "solti");
+        // Without a length, the exact album match wins (previous behaviour).
+        assert_eq!(lib.match_track(roon.0, roon.1, None, None).unwrap().file_id, "solti");
+
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
