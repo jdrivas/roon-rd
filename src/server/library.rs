@@ -311,6 +311,21 @@ impl LibrettoLibrary {
                 found.push(m);
             }
         }
+        // Album names of different releases of the same opera vary ("Wolfgang Amadeus
+        // Mozart : Le Nozze di Figaro" vs "Mozart: Le nozze di Figaro, K. 492"), so the
+        // album step can keep another recording's file and drop this one's. With a length
+        // to tell recordings apart, files outside the album candidates may also match by
+        // title; step 3 then chooses by length.
+        if album_matched && length_seconds.is_some() {
+            let mut others: Vec<&str> = self.librettos.keys().map(|s| s.as_str())
+                .filter(|id| !candidate_file_ids.contains(id)).collect();
+            others.sort();
+            for file_id in others {
+                if let Some(m) = self.match_in_file(file_id, false, track_title, disc_number, track_number) {
+                    found.push(m);
+                }
+            }
+        }
         if found.is_empty() {
             log::debug!("  no track match found in {} candidate file(s)", candidate_file_ids.len());
             return None;
@@ -369,6 +384,20 @@ impl LibrettoLibrary {
 
         // Title matching using parsed title structure (scored, picks best)
         let title = track_title?;
+        // A track titled exactly like Roon's (ignoring case and punctuation) wins outright:
+        // files made from a recording's own metadata copy Roon's titles, and those share a
+        // long opera prefix that the fragment scoring can't tell apart.
+        let roon_norm = normalize_text(title);
+        if let Some(i) = tracks.iter().position(|t| {
+            t.get("title").and_then(|t| t.as_str()).map(normalize_text).as_deref() == Some(roon_norm.as_str())
+        }) {
+            log::debug!("  exact title match: file={} track={}", file_id, i);
+            return Some(TrackMatch {
+                file_id: file_id.to_string(),
+                track_index: i,
+                match_method: MatchMethod::AlbumAndTitle,
+            });
+        }
         let roon_parsed = parse_roon_title(title);
         let mut best_score = 0u32;
         let mut best_index = None;
@@ -993,6 +1022,43 @@ mod tests {
         assert_eq!(m.file_id, "solti");
         // Without a length, the exact album match wins (previous behaviour).
         assert_eq!(lib.match_track(roon.0, roon.1, None, None).unwrap().file_id, "solti");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_recording_whose_album_name_does_not_match() {
+        // Real case (2026-11-07): Roon calls the Currentzis album "Wolfgang Amadeus
+        // Mozart : Le Nozze di Figaro". That contains Solti's album name but not the
+        // Currentzis file's, so only Solti's file passed the album step.
+        let dir = std::env::temp_dir().join("roon-rd-test-album-mismatch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, album: &str, tracks: &str| {
+            std::fs::write(dir.join(format!("{name}.interchange.json")), format!(r#"{{
+                "version": "1.0",
+                "opera": {{ "title": "Le nozze di Figaro" }},
+                "recording": {{ "album_title": "{album}" }},
+                "tracks": [{tracks}]
+            }}"#)).unwrap();
+        };
+        let seg = r#""segments": [{ "start": 0.0, "text": "x" }]"#;
+        write("solti", "Mozart: Le Nozze di Figaro", &format!(
+            r#"{{ "track_id": "d2t10", "disc_number": 2, "track_number": 10, "duration_seconds": 390.0,
+                 "title": "No. 18 Sestetto \"Riconosci in questo amplesso\" (Marcellina, Susanna, Figaro)", {seg} }}"#));
+        write("currentzis", "Mozart: Le nozze di Figaro, K. 492", &format!(
+            r#"{{ "track_id": "d1t50", "disc_number": 1, "track_number": 50, "duration_seconds": 342.6,
+                 "title": "Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto: Susanna, Marcellina, Don Curzio, Il Conte, Bartolo, Figaro)", {seg} }},
+               {{ "track_id": "d1t51", "disc_number": 1, "track_number": 51, "duration_seconds": 75.6,
+                 "title": "Le nozze di Figaro, K. 492: Atto Terzo: Eccovi, oh caro amico (Recitativo: Marcellina, Bartolo, Susanna, Figaro)", {seg} }}"#));
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Wolfgang Amadeus Mozart : Le Nozze di Figaro");
+        let sextet = Some("Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto: Susanna, Marcellina, Don Curzio, Il Conte, Bartolo, Figaro)");
+        let recit = Some("Le nozze di Figaro, K. 492: Atto Terzo: Eccovi, oh caro amico (Recitativo: Marcellina, Bartolo, Susanna, Figaro)");
+
+        let m = lib.match_track_with_length(album, sextet, Some(1), Some(50), Some(342.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("currentzis", 0));
+        let m = lib.match_track_with_length(album, recit, Some(1), Some(51), Some(76.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("currentzis", 1));
 
         std::fs::remove_dir_all(&dir).ok();
     }
