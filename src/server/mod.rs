@@ -2189,7 +2189,8 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             position: sticky;
             top: 0;
             z-index: 100;
-            background: linear-gradient(180deg, #1a1a2e 85%, transparent);
+            /* solid except a fixed 24px fade, so a tall header (ensemble panel) stays opaque */
+            background: linear-gradient(180deg, #1a1a2e calc(100% - 24px), transparent);
             padding: 16px 24px 28px;
             border-bottom: 1px solid #2a2a4e;
         }
@@ -2350,6 +2351,95 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         .ensemble-group .segment .seg-start.group-cont {
             visibility: hidden;
         }
+        /* Ensemble panel: one row per character while several sing at once */
+        #ensemble {
+            margin-top: 12px;
+            padding: 8px 0 2px;
+            border-top: 1px solid #2a2a4e;
+        }
+        #ensemble[hidden] { display: none; }
+        #ensemble .ens-title {
+            font-size: 11px;
+            letter-spacing: 1px;
+            text-transform: uppercase;
+            color: #666;
+            margin: 0 0 4px 12px;
+        }
+        .ens-row {
+            display: flex;
+            gap: 12px;
+            align-items: baseline;
+            padding: 4px 12px;
+            border-left: 3px solid transparent;
+            border-radius: 0 6px 6px 0;
+            transition: opacity 0.25s, background 0.25s, border-color 0.25s;
+        }
+        .ens-row .character {
+            min-width: 120px;
+            font-size: 13px;
+            font-weight: 600;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            color: #c9a84c;
+            text-align: right;
+            flex-shrink: 0;
+        }
+        .ens-row .texts { flex: 1; display: flex; gap: 24px; }
+        .ens-row .text { flex: 1; font-size: 18px; line-height: 1.4; color: #e8e8e8; }
+        .ens-row .translation { flex: 1; font-size: 15px; line-height: 1.4; color: #888; font-style: italic; }
+        .ens-row .translation:empty { display: none; }
+        .ens-row.singing {
+            opacity: 1;
+            background: rgba(201, 168, 76, 0.15);
+            border-left-color: #c9a84c;
+        }
+        .ens-row.singing .text { color: #fff; }
+        .ens-row.singing .character { color: #dfc06e; }
+        .ens-row.resting { opacity: 0.4; }
+        .ens-row.next { opacity: 0.3; }
+        .ens-row.next .text { font-style: italic; }
+        /* Display-option switches */
+        #view-opts {
+            display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px;
+            font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 12px;
+        }
+        #view-opts .lbl { color: #666; margin-right: 6px; }
+        #view-opts button {
+            background: none; border: 1px solid #3a3a5e; color: #888; padding: 2px 9px;
+            font: inherit; cursor: pointer;
+        }
+        #view-opts button + button { border-left: none; }
+        #view-opts .lbl + button { border-radius: 4px 0 0 4px; }
+        #view-opts button:last-child { border-radius: 0 4px 4px 0; }
+        #view-opts button.on { background: #c9a84c; border-color: #c9a84c; color: #1a1a2e; }
+        /* Aligned translation: each Italian phrase over its literal English */
+        .gloss { flex: 1; display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: flex-start; }
+        .gl { display: inline-flex; flex-direction: column; padding: 1px 4px; border-radius: 4px; }
+        .gl-it { font-size: 18px; line-height: 1.3; color: #e8e8e8; }
+        .gl-en { font-size: 13px; line-height: 1.3; color: #8a8a8a; font-style: italic; }
+        .segment.active .gl-it { color: #fff; font-size: 19px; }
+        .segment.active .gl-en { color: #bbb; font-size: 14px; }
+        .gl.now { background: rgba(201, 168, 76, 0.28); }
+        .gl.now .gl-it { color: #fff; }
+        .gl.now .gl-en { color: #ddd; }
+        .ens-row .ens-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+        .ens-row .text span.now, .ens-row .translation span.now {
+            background: rgba(201, 168, 76, 0.3); border-radius: 3px; color: #fff;
+        }
+        .ens-row.stanza.singing { background: rgba(201, 168, 76, 0.06); }
+        .ens-row.stanza.resting, .ens-row.stanza.next { opacity: 0.55; }
+        .ens-line.older { opacity: 0.45; }
+        .ens-line.older .gl-it, .ens-line.older .text { font-size: 15px; }
+        .ens-line.older .gl-en, .ens-line.older .translation { font-size: 12px; }
+        .ens-line.upcoming { font-style: italic; }
+        #libretto.ensemble-mode .segment { opacity: 0.25; }
+        #libretto.ensemble-mode .segment.active { background: none; }
+        @media (max-width: 600px) {
+            .ens-row { flex-direction: column; gap: 0; }
+            .ens-row .character { text-align: left; min-width: auto; font-size: 12px; }
+            .ens-row .texts { flex-direction: column; gap: 2px; }
+            .ens-row .text { font-size: 16px; }
+        }
         @media (max-width: 600px) {
             .segment { flex-direction: column; gap: 2px; }
             .segment .texts { flex-direction: column; gap: 4px; }
@@ -2367,6 +2457,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         <div id="matched-track"></div>
         <div id="time-display"></div>
         <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div id="view-opts">
+            <span class="grp"><span class="lbl">Translation</span><button data-opt="translation" data-val="aligned">Aligned</button><button data-opt="translation" data-val="line">Line</button><button data-opt="translation" data-val="off">Off</button></span>
+            <span class="grp"><span class="lbl">Ensemble</span><button data-opt="ensemble" data-val="stanza">Stanza</button><button data-opt="ensemble" data-val="rows">Rows</button></span>
+        </div>
+        <div id="ensemble" hidden></div>
         <div id="status"></div>
     </div>
     <div id="libretto">
@@ -2379,6 +2474,237 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     let currentSegmentIndex = -1;
     let seekPosition = 0;
     let trackLength = 0;
+
+    // Roon reports position in whole seconds, about once a second. Between reports we
+    // count forward locally so lines change on time instead of up to a second late.
+    // reportedPos/reportedAt anchor the estimate; isPlaying freezes it when paused.
+    let reportedPos = 0;
+    let reportedAt = 0;
+    let isPlaying = false;
+    const MAX_EXTRAPOLATE_S = 2.0;  // never run more than this past the last report
+    // Show each line slightly before it is sung so the reader keeps up (?lead=seconds).
+    const LEAD_SECONDS = (() => {
+        const v = parseFloat(new URLSearchParams(location.search).get('lead'));
+        return Number.isFinite(v) ? v : 0.7;
+    })();
+
+    function estimatedPosition() {
+        if (!isPlaying) return reportedPos;
+        const elapsed = (performance.now() - reportedAt) / 1000;
+        return reportedPos + Math.min(Math.max(elapsed, 0), MAX_EXTRAPOLATE_S);
+    }
+
+    // A report of N means the true position is somewhere in [N, N+1). Keep the running
+    // estimate if it is inside that second; otherwise (seek, drift, first report)
+    // re-anchor at the middle of it.
+    let lastReport = null;
+    function onReportedPosition(seconds) {
+        const r = Math.max(0, seconds || 0);
+        // Reports advancing by 1-2 s mean playback is running, even before a zone update says so.
+        if (!isPlaying && lastReport !== null && r > lastReport && r - lastReport <= 2) {
+            isPlaying = true;
+        }
+        lastReport = r;
+        const est = estimatedPosition();
+        if (!(isPlaying && est >= r && est < r + 1)) {
+            reportedPos = r + (isPlaying ? 0.5 : 0);
+            reportedAt = performance.now();
+        }
+        seekPosition = estimatedPosition();
+        updateHighlight(seekPosition);
+    }
+
+    setInterval(() => {
+        if (currentContent && isPlaying) {
+            seekPosition = estimatedPosition();
+            updateHighlight(seekPosition);
+        }
+    }, 100);
+
+    // ---- Display options (remembered in this browser) ----
+    // translation: 'aligned' (each Italian phrase over its literal English), 'line', 'off'
+    // ensemble:    'stanza' (each character's text once, the highlight moves within it)
+    //              or 'rows' (each character's most recent lines)
+    const OPTS = { translation: 'aligned', ensemble: 'stanza' };
+    try { Object.assign(OPTS, JSON.parse(localStorage.getItem('librettoViewOpts') || '{}')); } catch (e) {}
+    function saveOpts() { try { localStorage.setItem('librettoViewOpts', JSON.stringify(OPTS)); } catch (e) {} }
+
+    // gloss: [{v, c, it, en}] phrases; hl: Set of "v|c" phrase keys to highlight (optional)
+    function renderGloss(gloss, hl) {
+        return '<div class="gloss">' + gloss.map(g => {
+            const on = hl && hl.has(`${g.v}|${g.c}`) ? ' now' : '';
+            return `<span class="gl${on}"><span class="gl-it">${escapeHtml(g.it)}</span>` +
+                   `<span class="gl-en">${escapeHtml(g.en)}</span></span>`;
+        }).join('') + '</div>';
+    }
+
+    // One sung line, according to the translation option.
+    function renderSung(seg) {
+        if (OPTS.translation === 'aligned' && seg.gloss && seg.gloss.length) return renderGloss(seg.gloss);
+        let html = `<div class="text">${escapeHtml(seg.text || '')}</div>`;
+        if (OPTS.translation !== 'off') html += `<div class="translation">${escapeHtml(seg.translation || '')}</div>`;
+        return html;
+    }
+
+    // One whole verse of a character's text ([[it, en], ...]), highlighting phrases in hl.
+    function renderVerse(vid, chunks, hl) {
+        const gloss = chunks.map(([it, en], c) => ({ v: vid, c, it, en }));
+        if (OPTS.translation === 'aligned') return renderGloss(gloss, hl);
+        const span = (g, field) => `<span${hl && hl.has(`${g.v}|${g.c}`) ? ' class="now"' : ''}>${escapeHtml(g[field])}</span>`;
+        let html = `<div class="text">${gloss.map(g => span(g, 'it')).join(' ')}</div>`;
+        if (OPTS.translation !== 'off') html += `<div class="translation">${gloss.map(g => span(g, 'en')).join(' ')}</div>`;
+        return html;
+    }
+
+    // ---- Ensemble panel ----
+    // Sung-text tracks give each line an `end` (its last note), optionally a `voice`
+    // (score order), and a `gloss` with `verses` (the character's text, once). Where two
+    // or more characters sing at once, a panel shows every singing character together:
+    //   stanza: each character's verses for the whole passage, fixed; the phrases being
+    //           sung now are highlighted, so repeats move the highlight, not the text
+    //   rows:   each character's last few lines, newest at the bottom
+    // Passages are worked out once per track, in display time (position + lead).
+    // Tracks without `end` times (librettos) never use the panel.
+    const ENS_ENTER_S = 0.5;   // two voices must overlap this long to start a passage
+    const ENS_EXIT_S = 2.5;    // ...and at most one voice for this long to end it
+    const ENS_HOLD_S = 1.0;    // a line stays lit this long after its last note (short rests)
+    const ENS_HISTORY = 3;     // lines per character in 'rows' style
+    let ens = null;  // { order, byChar, passages: [{t0, t1, rows: [{c, lines, verses}]}], verses }
+    let ensKey = '';
+
+    function prepareEnsemble(segments) {
+        ens = null; ensKey = '';
+        document.getElementById('ensemble').hidden = true;
+        document.getElementById('libretto').classList.remove('ensemble-mode');
+        const lines = (segments || []).filter(s => s.end != null && s.character);
+        if (!lines.length) return;
+        const byChar = {}, first = {}, voice = {}, verses = {};
+        lines.forEach((s, i) => {
+            (byChar[s.character] = byChar[s.character] || []).push(s);
+            if (!(s.character in first)) first[s.character] = i;
+            if (s.voice != null) voice[s.character] = s.voice;
+            Object.assign(verses, s.verses || {});
+        });
+        for (const c in byChar) byChar[c].sort((a, b) => a.start - b.start);
+        const order = Object.keys(byChar).sort((a, b) =>
+            ((voice[a] ?? 1e6) - (voice[b] ?? 1e6)) || (first[a] - first[b]));
+
+        // Passages: from when two voices start overlapping (for at least ENS_ENTER_S)
+        // until at most one voice has been singing for ENS_EXIT_S.
+        const tMax = Math.max(...lines.map(s => s.end)) + ENS_EXIT_S + 1;
+        const passages = [];
+        let on = false, overlapSince = null, quietSince = null, t0 = 0;
+        for (let i = 0; i * 0.1 <= tMax; i++) {
+            const t = i * 0.1;
+            const sounding = new Set(lines.filter(s => s.start <= t && t < s.end).map(s => s.character)).size;
+            if (sounding >= 2) {
+                quietSince = null;
+                if (overlapSince === null) overlapSince = t;
+                if (!on && t - overlapSince >= ENS_ENTER_S) { on = true; t0 = overlapSince; }
+            } else {
+                overlapSince = null;
+                if (on) {
+                    if (quietSince === null) quietSince = t;
+                    if (t - quietSince >= ENS_EXIT_S) { on = false; passages.push({ t0, t1: t }); }
+                }
+            }
+        }
+        if (on) passages.push({ t0, t1: tMax });
+        const verseNo = vid => parseInt(vid.slice(vid.lastIndexOf(':') + 1), 10);
+        for (const p of passages) {
+            p.rows = [];
+            for (const c of order) {
+                // lines in the passage; one that merely ends just after it starts belongs before it
+                const ls = byChar[c].filter(s => s.start < p.t1 && (s.start >= p.t0 || s.end > p.t0 + 1.0));
+                if (!ls.length) continue;
+                const vids = [...new Set(ls.flatMap(s => (s.gloss || []).map(g => g.v)))]
+                    .filter(v => verses[v]).sort((a, b) => verseNo(a) - verseNo(b));
+                p.rows.push({ c, lines: ls, verses: vids });
+            }
+        }
+        ens = { order, byChar, passages, verses };
+    }
+
+    // Latest line of `char` that has started by q, and the next one after it.
+    function ensLines(char, q) {
+        const list = ens.byChar[char];
+        let cur = null, next = null;
+        for (const s of list) {
+            if (s.start <= q) cur = s; else { next = s; break; }
+        }
+        return { cur, next };
+    }
+
+    function updateEnsemble(position) {
+        if (!ens) return;
+        const q = position + LEAD_SECONDS;
+        const panel = document.getElementById('ensemble');
+        const list = document.getElementById('libretto');
+        const p = ens.passages.find(p => p.t0 <= q && q < p.t1);
+        if (!p) {
+            if (!panel.hidden) { panel.hidden = true; list.classList.remove('ensemble-mode'); ensKey = ''; }
+            return;
+        }
+
+        const rows = p.rows.map(r => {
+            const { cur, next } = ensLines(r.c, q);
+            let state = 'resting';
+            if (cur && cur.end > p.t0 && q < cur.end + ENS_HOLD_S) state = 'singing';
+            else if (next && next.start < p.t1 && next.start - q <= 2.0) state = 'next';
+            return { ...r, cur, next, state };
+        });
+        const key = [OPTS.ensemble, OPTS.translation, p.t0,
+                     ...rows.map(r => `${r.c}|${r.cur ? r.cur.start : ''}|${r.state}`)].join(';');
+        if (key === ensKey) return;
+        ensKey = key;
+
+        let html = '<div class="ens-title">Ensemble</div>';
+        for (const r of rows) {
+            html += `<div class="ens-row ${OPTS.ensemble} ${r.state}">` +
+                    `<div class="character">${escapeHtml(r.c)}</div><div class="ens-body">`;
+            if (OPTS.ensemble === 'stanza' && r.verses.length) {
+                const hl = r.state === 'singing' && r.cur && r.cur.gloss
+                    ? new Set(r.cur.gloss.map(g => `${g.v}|${g.c}`)) : null;
+                html += r.verses.map(vid =>
+                    `<div class="ens-verse">${renderVerse(vid, ens.verses[vid], hl)}</div>`).join('');
+            } else {
+                const started = r.lines.filter(s => s.start <= q);
+                if (!started.length) {
+                    html += `<div class="ens-line upcoming">${renderSung(r.next || r.lines[0])}</div>`;
+                } else {
+                    const recent = started.slice(-ENS_HISTORY);
+                    html += recent.map((s, i) => {
+                        const latest = i === recent.length - 1;
+                        return `<div class="ens-line${latest ? '' : ' older'}">${renderSung(s)}</div>`;
+                    }).join('');
+                }
+            }
+            html += '</div></div>';
+        }
+        panel.innerHTML = html;
+        panel.hidden = false;
+        list.classList.add('ensemble-mode');
+    }
+
+    // Header switches for the display options.
+    function renderOptionButtons() {
+        document.querySelectorAll('#view-opts button').forEach(b =>
+            b.classList.toggle('on', OPTS[b.dataset.opt] === b.dataset.val));
+    }
+    document.getElementById('view-opts').addEventListener('click', e => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        OPTS[b.dataset.opt] = b.dataset.val;
+        saveOpts();
+        renderOptionButtons();
+        ensKey = '';
+        if (currentContent) {
+            renderSegments(currentContent.segments);
+            currentSegmentIndex = -1;
+            updateHighlight(seekPosition);
+        }
+    });
+    renderOptionButtons();
     let autoScroll = true;
     // Maps segment index → { start, end } of its group range, or null if ungrouped
     let segmentGroupMap = [];
@@ -2437,8 +2763,7 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         if (seg.direction) {
             html += `<div class="direction-text">${escapeHtml(seg.direction)}</div>`;
         } else {
-            html += `<div class="text">${escapeHtml(seg.text || '')}</div>`;
-            html += `<div class="translation">${escapeHtml(seg.translation || '')}</div>`;
+            html += renderSung(seg);
         }
         html += `</div>`;
         return html;
@@ -2492,13 +2817,16 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         let html = `<span class="current">${formatTime(position)}</span>`;
         html += ` <span class="total">/ ${formatTime(trackLength)}</span>`;
         const segs = currentContent?.segments;
+        const tid = currentContent?.track_id ? currentContent.track_id.toUpperCase() + ': ' : '';
         if (segs && currentSegmentIndex >= 0 && currentSegmentIndex < segs.length) {
             const seg = segs[currentSegmentIndex];
             const nextSeg = segs[currentSegmentIndex + 1];
-            html += `  &mdash;  <span class="seg-time">seg ${currentSegmentIndex + 1}/${segs.length}`;
+            html += `  &mdash;  <span class="seg-time">${tid}seg ${currentSegmentIndex + 1}/${segs.length}`;
             html += ` @ ${formatTime(seg.start)}`;
             if (nextSeg) html += ` &rarr; ${formatTime(nextSeg.start)}`;
             html += `</span>`;
+        } else if (currentContent && tid) {
+            html += `  &mdash;  <span class="seg-time">${tid}seg 0/0</span>`;
         }
         timeEl.innerHTML = html;
     }
@@ -2508,8 +2836,9 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         if (!currentContent) return;
 
         updateTimeDisplay(position);
+        updateEnsemble(position);
 
-        const newIndex = findSegmentIndex(currentContent.segments, position);
+        const newIndex = findSegmentIndex(currentContent.segments, position + LEAD_SECONDS);
         if (newIndex === currentSegmentIndex) return;
 
         currentSegmentIndex = newIndex;
@@ -2563,31 +2892,71 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
     }
 
     // Handle zone data from WebSocket — only updates track title and position
+    // The server sends libretto matches and positions for every Roon zone, tagged with
+    // zone_id. The viewer follows one zone: a playing zone (preferring one whose track
+    // has a libretto), staying on it while it's paused; with nothing playing yet, a zone
+    // whose track has a libretto. Messages for other zones are stored or ignored.
+    const contentByZone = {};   // zone_id -> LibrettoContent or null
+    let activeZoneId = null;
+
+    function pickZone(zones) {
+        const hasContent = z => !!contentByZone[z.zone_id];
+        const playing = zones.filter(z => z.state === 'Playing' && z.track);
+        return playing.find(hasContent) || playing[0]
+            || zones.find(z => z.zone_id === activeZoneId)
+            || zones.find(hasContent) || null;
+    }
+
     function handleZoneUpdate(zones) {
-        // Find first playing zone with a track
-        const playing = zones.find(z => z.state === 'Playing' && z.track);
-        if (!playing) {
+        const zone = pickZone(zones);
+        if (!zone) {
             document.getElementById('roon-track').textContent = 'Paused or stopped';
             return;
         }
+        if (zone.zone_id !== activeZoneId) {
+            // Switch zones: show that zone's match and restart position tracking.
+            activeZoneId = zone.zone_id;
+            lastReport = null;
+            isPlaying = false;
+            reportedPos = zone.position_seconds || 0;
+            reportedAt = performance.now();
+            showContent(contentByZone[activeZoneId] ?? null);
+        }
 
-        document.getElementById('roon-track').textContent = playing.track;
-        trackLength = playing.length_seconds || trackLength;
+        const playingNow = zone.state === 'Playing';
+        document.getElementById('roon-track').textContent =
+            zone.track ? (playingNow ? zone.track : `${zone.track} (paused)`) : 'Paused or stopped';
+        trackLength = zone.length_seconds || trackLength;
 
-        if (playing.position_seconds != null) {
-            seekPosition = playing.position_seconds;
-            updateHighlight(seekPosition);
+        if (!playingNow) {
+            if (isPlaying) {
+                reportedPos = estimatedPosition();  // freeze where we are
+                isPlaying = false;
+            }
+            return;
+        }
+        if (!isPlaying) {
+            isPlaying = true;
+            reportedAt = performance.now();
+        }
+        if (zone.position_seconds != null) {
+            onReportedPosition(zone.position_seconds);
         }
     }
 
     // Handle libretto content update from server
     function handleLibrettoUpdate(msg) {
-        const content = msg.content;
+        contentByZone[msg.zone_id] = msg.content || null;
+        if (msg.zone_id === activeZoneId) showContent(msg.content || null);
+    }
+
+    function showContent(content) {
 
         if (!content) {
             // No match for this zone
             currentContent = null;
             currentSegmentIndex = -1;
+            prepareEnsemble(null);
             document.getElementById('matched-track').innerHTML =
                 `<span class="label">No libretto match for current track</span>`;
             document.getElementById('libretto-meta').textContent = '';
@@ -2616,8 +2985,10 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         currentContent = content;
         currentSegmentIndex = -1;
         renderSegments(content.segments);
+        prepareEnsemble(content.segments);
 
         // Apply current seek position
+        seekPosition = estimatedPosition();
         if (seekPosition > 0) {
             updateHighlight(seekPosition);
         }
@@ -2640,8 +3011,7 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
                 } else if (msg.type === 'libretto_update') {
                     handleLibrettoUpdate(msg);
                 } else if (msg.type === 'seek_updated') {
-                    seekPosition = msg.seek_position || 0;
-                    updateHighlight(seekPosition);
+                    if (msg.zone_id === activeZoneId) onReportedPosition(msg.seek_position || 0);
                 } else if (msg.type === 'connection_changed') {
                     document.getElementById('status').textContent =
                         msg.connected ? 'Connected to Roon' : 'Roon disconnected';
