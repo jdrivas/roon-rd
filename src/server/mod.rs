@@ -2638,10 +2638,11 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             const members = new Set();
             for (const c of order) {
                 // Lines in the passage. One that merely ends just after it starts belongs to
-                // what came before; one that starts just before it ends and runs on is the
-                // next solo, not part of the ensemble.
+                // what came before (unless it starts with the overlap that opened the
+                // passage); one that starts just before it ends and runs on is the next
+                // solo, not part of the ensemble.
                 const ls = byChar[c].filter(s => s.start < p.t1
-                    && (s.start >= p.t0 || s.end > p.t0 + 1.0)
+                    && (s.start >= p.t0 - ENS_ENTER_S || s.end > p.t0 + 1.0)
                     && !(s.start >= p.t1 - 1.0 && s.end > p.t1 + 1.0));
                 if (!ls.length) continue;
                 ls.forEach(s => members.add(s));
@@ -2655,7 +2656,9 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             p.start = Math.min(p.t0, ...[...members].map(s => s.start));
             p.absorbed = lines.filter(s => !members.has(s) && s.start >= p.start && s.start < p.t0);
         }
-        ens = { order, byChar, passages, verses };
+        // A brief overlap whose lines mostly belong elsewhere can leave a single voice:
+        // that is not an ensemble, so its lines stay in the list.
+        ens = { order, byChar, passages: passages.filter(p => p.rows.length >= 2), verses };
     }
 
     // Latest line of `char` that has started by q, and the next one after it.
@@ -2687,17 +2690,32 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         });
     }
 
+    // Phrases of a line being sung at q, as "v|c" keys. A phrase is lit from its start
+    // until ENS_HOLD_S after its end (bridging short rests), but no later than the start
+    // of the line's next phrase. Lines without phrase times (older files) light them all.
+    function litPhrases(line, q) {
+        const gl = line.gloss || [];
+        if (!gl.length || gl[0].start == null) return new Set(gl.map(g => `${g.v}|${g.c}`));
+        const lit = new Set();
+        gl.forEach((g, i) => {
+            const nxt = gl.slice(i + 1).find(h => h.start > g.start);
+            const until = Math.min(g.end + ENS_HOLD_S, nxt ? nxt.start : Infinity);
+            if (g.start <= q && q < until) lit.add(`${g.v}|${g.c}`);
+        });
+        return lit;
+    }
+
     function renderCardBody(p, q, live) {
         const rows = cardRows(p, q, live);
+        const lit = r => r.state === 'singing' && r.cur ? [...litPhrases(r.cur, q)].join(',') : '';
         const key = [OPTS.ensemble, OPTS.translation, live,
-                     ...rows.map(r => `${r.c}|${r.cur ? r.cur.start : ''}|${r.state}`)].join(';');
+                     ...rows.map(r => `${r.c}|${r.cur ? r.cur.start : ''}|${r.state}|${lit(r)}`)].join(';');
         let html = '';
         for (const r of rows) {
             html += `<div class="ens-row ${OPTS.ensemble} ${r.state}">` +
                     `<div class="character">${escapeHtml(r.c)}</div><div class="ens-body">`;
             if (OPTS.ensemble === 'stanza' && r.verses.length) {
-                const hl = r.state === 'singing' && r.cur && r.cur.gloss
-                    ? new Set(r.cur.gloss.map(g => `${g.v}|${g.c}`)) : null;
+                const hl = r.state === 'singing' && r.cur ? litPhrases(r.cur, q) : null;
                 html += r.verses.map(vid =>
                     `<div class="ens-verse">${renderVerse(vid, ens.verses[vid], hl)}</div>`).join('');
             } else {
