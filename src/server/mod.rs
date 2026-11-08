@@ -2690,19 +2690,41 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
         });
     }
 
-    // Phrases of a line being sung at q, as "v|c" keys. A phrase is lit from its start
-    // until ENS_HOLD_S after its end (bridging short rests), but no later than the start
-    // of the line's next phrase. Lines without phrase times (older files) light them all.
-    function litPhrases(line, q) {
+    // Indices of a line's phrases being sung at q. A phrase is lit from its start until
+    // ENS_HOLD_S after its end (bridging short rests), but no later than the start of
+    // the line's next phrase. Returns null for lines without phrase times (older files).
+    function litPhraseIndices(line, q) {
         const gl = line.gloss || [];
-        if (!gl.length || gl[0].start == null) return new Set(gl.map(g => `${g.v}|${g.c}`));
+        if (!gl.length || gl[0].start == null) return null;
         const lit = new Set();
         gl.forEach((g, i) => {
             const nxt = gl.slice(i + 1).find(h => h.start > g.start);
             const until = Math.min(g.end + ENS_HOLD_S, nxt ? nxt.start : Infinity);
-            if (g.start <= q && q < until) lit.add(`${g.v}|${g.c}`);
+            if (g.start <= q && q < until) lit.add(i);
         });
         return lit;
+    }
+
+    // The same as "v|c" keys, for the stanza view (older files light every phrase).
+    function litPhrases(line, q) {
+        const gl = line.gloss || [];
+        const idx = litPhraseIndices(line, q);
+        return new Set(gl.filter((g, i) => !idx || idx.has(i)).map(g => `${g.v}|${g.c}`));
+    }
+
+    // In the list, the active solo line also lights the phrase being sung (aligned
+    // translation only, where phrases are shown separately).
+    let markedLine = null;
+    function markLinePhrases(f, q) {
+        if (markedLine && markedLine !== f) {
+            document.querySelectorAll(`#${markedLine.id} .gl.now`).forEach(e => e.classList.remove('now'));
+        }
+        markedLine = f;
+        if (!f) return;
+        const seg = currentContent.segments[f.i];
+        const idx = litPhraseIndices(seg, q);
+        const spans = document.querySelectorAll(`#${f.id} .gl`);
+        spans.forEach((e, i) => e.classList.toggle('now', !!idx && idx.has(i)));
     }
 
     function renderCardBody(p, q, live) {
@@ -2779,6 +2801,7 @@ const LIBRETTO_VIEW_HTML: &str = r##"<!DOCTYPE html>
             if (q < p.t1) renderCard(flow[ai], q, true);
             else renderCard(flow[ai], p.t1, false);
         }
+        markLinePhrases(ai >= 0 && flow[ai].kind === 'seg' ? flow[ai] : null, q);
         if (trackLength > 0) {
             document.getElementById('progress-fill').style.width = `${(position / trackLength) * 100}%`;
         }
