@@ -368,9 +368,11 @@ impl LibrettoLibrary {
         let tracks = self.librettos.get(file_id)?.json.get("tracks")?.as_array()?;
         if album_matched {
             if let (Some(disc), Some(track_num)) = (disc_number, track_number) {
+                let mut numbered = false;
                 for (i, track) in tracks.iter().enumerate() {
                     let t_disc = track.get("disc_number").and_then(|d| d.as_u64()).map(|d| d as u32);
                     let t_num = track.get("track_number").and_then(|n| n.as_u64()).map(|n| n as u32);
+                    numbered |= t_disc.is_some() && t_num.is_some();
                     if t_disc == Some(disc) && t_num == Some(track_num) {
                         return Some(TrackMatch {
                             file_id: file_id.to_string(),
@@ -378,6 +380,14 @@ impl LibrettoLibrary {
                             match_method: MatchMethod::AlbumAndNumber,
                         });
                     }
+                }
+                // The album matched and the file numbers its tracks, but has no such track:
+                // the track isn't in this file. Don't fall back to titles: tracks of one
+                // recording share a long title prefix ("Le nozze di Figaro, K. 492: Atto
+                // Terzo:"), which matched a track the file lacks to another track's text.
+                if numbered {
+                    log::debug!("  no disc {} track {} in {}; not matching by title", disc, track_num, file_id);
+                    return None;
                 }
             }
         }
@@ -1060,6 +1070,31 @@ mod tests {
         let m = lib.match_track_with_length(album, recit, Some(1), Some(51), Some(76.0)).unwrap();
         assert_eq!((m.file_id.as_str(), m.track_index), ("currentzis", 1));
 
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_track_missing_from_its_file_is_not_matched_by_title() {
+        // Real case (2026-11-08): Currentzis's track 52 ("Andiam, bel paggio") was not in
+        // the file, and its shared title prefix matched the Sextet's track instead.
+        let dir = std::env::temp_dir().join("roon-rd-test-missing-track");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("currentzis.interchange.json"), r#"{
+            "version": "1.1-score",
+            "opera": { "title": "Le nozze di Figaro" },
+            "recording": { "album_title": "Mozart: Le nozze di Figaro, K. 492" },
+            "tracks": [{ "track_id": "d1t50", "disc_number": 1, "track_number": 50, "duration_seconds": 342.6,
+                         "title": "Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto)",
+                         "segments": [{ "start": 0.0, "text": "Riconosci" }] }]
+        }"#).unwrap();
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Mozart: Le nozze di Figaro, K. 492");
+        let andiam = Some("Le nozze di Figaro, K. 492: Atto Terzo: Andiam, bel paggio (Recitativo: Barbarina, Cherubino)");
+        assert!(lib.match_track_with_length(album, andiam, Some(1), Some(52), Some(48.0)).is_none());
+        // The track the file has still matches by number.
+        let sextet = Some("Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto)");
+        let m = lib.match_track_with_length(album, sextet, Some(1), Some(50), Some(342.0)).unwrap();
+        assert_eq!(m.track_index, 0);
         std::fs::remove_dir_all(&dir).ok();
     }
 
