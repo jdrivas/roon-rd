@@ -304,7 +304,7 @@ impl LibrettoLibrary {
         // Step 2: Within each candidate file, find its best track match.
         let mut found: Vec<TrackMatch> = Vec::new();
         for file_id in &candidate_file_ids {
-            if let Some(m) = self.match_in_file(file_id, album_matched, track_title, disc_number, track_number) {
+            if let Some(m) = self.match_in_file(file_id, album_matched, track_title, disc_number, track_number, length_seconds) {
                 if length_seconds.is_none() {
                     return Some(m);  // no way to tell recordings apart: first match wins
                 }
@@ -321,7 +321,7 @@ impl LibrettoLibrary {
                 .filter(|id| !candidate_file_ids.contains(id)).collect();
             others.sort();
             for file_id in others {
-                if let Some(m) = self.match_in_file(file_id, false, track_title, disc_number, track_number) {
+                if let Some(m) = self.match_in_file(file_id, false, track_title, disc_number, track_number, length_seconds) {
                     found.push(m);
                 }
             }
@@ -364,6 +364,7 @@ impl LibrettoLibrary {
         track_title: Option<&str>,
         disc_number: Option<u32>,
         track_number: Option<u32>,
+        length_seconds: Option<f64>,
     ) -> Option<TrackMatch> {
         let tracks = self.librettos.get(file_id)?.json.get("tracks")?.as_array()?;
         if album_matched {
@@ -411,6 +412,12 @@ impl LibrettoLibrary {
         let roon_parsed = parse_roon_title(title);
         let mut best_score = 0u32;
         let mut best_index = None;
+        // Among title matches, a track as long as the playing one (within LENGTH_MATCH_S;
+        // Roon reports a length truncated to whole seconds)
+        // wins over a better-scoring title: a recording's own titles (from its files) can
+        // be worded unlike Roon's, so several tracks score, and the best score can be the
+        // wrong track (Solti's overture for "Voi che sapete"). Lengths rarely repeat.
+        let mut best_by_length: Option<(u32, usize)> = None;
         for (i, track) in tracks.iter().enumerate() {
             if let Some(t_title) = track.get("title").and_then(|t| t.as_str()) {
                 let ic_parsed = parse_ic_title(t_title);
@@ -419,10 +426,16 @@ impl LibrettoLibrary {
                         best_score = score;
                         best_index = Some(i);
                     }
+                    let dur = track.get("duration_seconds").and_then(|d| d.as_f64());
+                    if let (Some(len), Some(dur)) = (length_seconds, dur) {
+                        if (dur - len).abs() <= LENGTH_MATCH_S && best_by_length.map_or(true, |(s, _)| score > s) {
+                            best_by_length = Some((score, i));
+                        }
+                    }
                 }
             }
         }
-        let idx = best_index?;
+        let idx = best_by_length.map(|(_, i)| i).or(best_index)?;
         log::debug!("  title match: file={} track={} score={}", file_id, idx, best_score);
         Some(TrackMatch {
             file_id: file_id.to_string(),
@@ -531,6 +544,9 @@ fn find_interchange_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Res
     }
     Ok(())
 }
+
+/// A track this close in length (seconds) to the playing one is taken to be it.
+const LENGTH_MATCH_S: f64 = 1.0;
 
 /// Normalize an album name for matching: lowercase, collapse whitespace, strip punctuation.
 fn normalize_album(album: &str) -> String {
@@ -1095,6 +1111,37 @@ mod tests {
         let sextet = Some("Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto)");
         let m = lib.match_track_with_length(album, sextet, Some(1), Some(50), Some(342.0)).unwrap();
         assert_eq!(m.track_index, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_track_of_the_playing_length_wins_among_title_matches() {
+        // Real case (2026-11-12): Solti's file carries the FLAC tags' titles, worded unlike
+        // Roon's; for "Voi che sapete" (233 s) the best title score was the overture (231 s).
+        let dir = std::env::temp_dir().join("roon-rd-test-length-among-titles");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("solti.interchange.json"), r#"{
+            "version": "1.1-score",
+            "opera": { "title": "Le nozze di Figaro" },
+            "recording": { "album_title": "Mozart: Le Nozze di Figaro", "album_title_aliases": ["Solti: The Operas - Mozart"] },
+            "tracks": [
+              { "track_id": "d1t1", "disc_number": 1, "track_number": 1, "duration_seconds": 231.2,
+                "title": "Le nozze di Figaro, K. 492 Mozart: Le nozze di Figaro, K. 492: Overture", "segments": [] },
+              { "track_id": "d1t11", "disc_number": 1, "track_number": 11, "duration_seconds": 233.4,
+                "title": "Le nozze di Figaro, K. 492, Act II Mozart: Le nozze di Figaro, K. 492, Act II: No. 12, Voi che sapete – Bravo! che bella voce!",
+                "segments": [{ "start": 0.0, "text": "Voi che sapete" }] },
+              { "track_id": "d2t6", "disc_number": 2, "track_number": 6, "duration_seconds": 226.2,
+                "title": "Le nozze di Figaro, K. 492, Act II Mozart: Le nozze di Figaro, K. 492, Act II: No. 16, Finale: h-i. Voi signor, che giusto siete",
+                "segments": [{ "start": 0.0, "text": "Voi signor" }] }]
+        }"#).unwrap();
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Solti: The Operas - Mozart");
+        let voi = Some("Le nozze di Figaro, K. 492: Act II, Scene II. No. 12 Arietta \"Voi che sapete che cosa è amor\" (Cherubino)");
+        let m = lib.match_track_with_length(album, voi, None, None, Some(233.0)).unwrap();
+        assert_eq!(m.track_index, 1);
+        let fin = Some("Le nozze di Figaro, K. 492: Act II, Scene XI. No. 16 Finale \"Voi signor che giusto siete\" (Il Conte, La Contessa, Susanna)");
+        let m = lib.match_track_with_length(album, fin, None, None, Some(226.0)).unwrap();
+        assert_eq!(m.track_index, 2);
         std::fs::remove_dir_all(&dir).ok();
     }
 
