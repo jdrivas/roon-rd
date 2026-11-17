@@ -1,0 +1,173 @@
+/* Libretto view (libretto.js): the scrolling sung text. Every rule is scoped to .lv so the
+   view can sit inside another page. --lv-scroll-margin clears a sticky header above it. */
+.lv {
+    font-family: 'Georgia', 'Times New Roman', serif;
+    color: #e0e0e0;
+    padding: 8px 24px 40vh;
+}
+.lv .segment {
+    display: flex;
+    gap: 12px;
+    padding: 6px 12px;
+    border-radius: 6px;
+    transition: background 0.3s, opacity 0.3s;
+    opacity: 0.4;
+    margin-bottom: 2px;
+    align-items: baseline;
+}
+.lv .segment.active { background: rgba(201, 168, 76, 0.15); opacity: 1.0; }
+.lv .segment.past { opacity: 0.6; }
+.lv .segment.future { opacity: 0.35; }
+.lv .segment .seg-start {
+    min-width: 52px;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    color: #555;
+    padding-top: 4px;
+    text-align: right;
+    flex-shrink: 0;
+}
+.lv .segment.active .seg-start { color: #c9a84c; }
+.lv .segment .character {
+    min-width: 120px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #c9a84c;
+    padding-top: 3px;
+    text-align: right;
+    flex-shrink: 0;
+}
+.lv .segment .texts { flex: 1; display: flex; gap: 24px; }
+.lv .segment .text {
+    flex: 1;
+    font-size: 18px;
+    line-height: 1.5;
+    color: #e8e8e8;
+    white-space: pre-wrap;
+}
+.lv .segment .translation {
+    flex: 1;
+    font-size: 15px;
+    line-height: 1.5;
+    color: #888;
+    font-style: italic;
+    white-space: pre-wrap;
+}
+.lv .segment .direction-text {
+    flex: 1 1 100%;
+    font-size: 14px;
+    line-height: 1.4;
+    color: #9a8a5c;
+    font-style: italic;
+    white-space: pre-wrap;
+}
+.lv .segment.active .text { color: #fff; font-size: 19px; }
+.lv .segment.active .translation { color: #bbb; font-size: 16px; }
+.lv .segment.active .character { color: #dfc06e; }
+.lv .lv-empty {
+    text-align: center;
+    padding: 80px 24px;
+    color: #666;
+    font-size: 18px;
+}
+/* Older librettos: lines tagged as one group, shown together */
+.lv .ensemble-group {
+    border-left: 3px solid rgba(201, 168, 76, 0.25);
+    margin-left: 52px;
+    padding-left: 8px;
+    margin-bottom: 4px;
+    border-radius: 0 6px 6px 0;
+}
+.lv .ensemble-group.active { border-left-color: rgba(201, 168, 76, 0.7); background: rgba(201, 168, 76, 0.06); }
+.lv .ensemble-group.past { border-left-color: rgba(201, 168, 76, 0.15); }
+.lv .ensemble-group .segment { margin-bottom: 0; }
+.lv .ensemble-group .segment .seg-start.group-cont { visibility: hidden; }
+/* Ensemble card rows: one per character while several sing at once */
+.lv .ens-card .ens-title {
+    font-size: 11px;
+    letter-spacing: 1px;
+    text-transform: uppercase;
+    color: #666;
+    margin: 0 0 4px 12px;
+}
+.lv .ens-row {
+    display: flex;
+    gap: 12px;
+    align-items: baseline;
+    padding: 4px 12px;
+    border-left: 3px solid transparent;
+    border-radius: 0 6px 6px 0;
+    transition: opacity 0.25s, background 0.25s, border-color 0.25s;
+}
+.lv .ens-row .character {
+    min-width: 120px;
+    font-size: 13px;
+    font-weight: 600;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    color: #c9a84c;
+    text-align: right;
+    flex-shrink: 0;
+}
+.lv .ens-row .texts { flex: 1; display: flex; gap: 24px; }
+.lv .ens-row .text { flex: 1; font-size: 18px; line-height: 1.4; color: #e8e8e8; }
+.lv .ens-row .translation { flex: 1; font-size: 15px; line-height: 1.4; color: #888; font-style: italic; }
+.lv .ens-row .translation:empty { display: none; }
+.lv .ens-row.singing { opacity: 1; background: rgba(201, 168, 76, 0.15); border-left-color: #c9a84c; }
+.lv .ens-row.singing .text { color: #fff; }
+.lv .ens-row.singing .character { color: #dfc06e; }
+.lv .ens-row.resting { opacity: 0.4; }
+.lv .ens-row.next { opacity: 0.3; }
+.lv .ens-row.next .text { font-style: italic; }
+/* Aligned translation: each Italian phrase over its literal English */
+.lv .gloss { flex: 1; display: flex; flex-wrap: wrap; gap: 2px 14px; align-items: flex-start; }
+.lv .gl { display: inline-flex; flex-direction: column; padding: 1px 4px; border-radius: 4px; }
+.lv .gl-it { font-size: 18px; line-height: 1.3; color: #e8e8e8; }
+.lv .gl-en { font-size: 13px; line-height: 1.3; color: #8a8a8a; font-style: italic; }
+.lv .segment.active .gl-it { color: #fff; font-size: 19px; }
+.lv .segment.active .gl-en { color: #bbb; font-size: 14px; }
+.lv .gl.now { background: rgba(201, 168, 76, 0.28); }
+.lv .gl.now .gl-it { color: #fff; }
+.lv .gl.now .gl-en { color: #ddd; }
+.lv .ens-row .ens-body { flex: 1; display: flex; flex-direction: column; gap: 2px; }
+.lv .ens-row .text span.now, .lv .ens-row .translation span.now {
+    background: rgba(201, 168, 76, 0.3); border-radius: 3px; color: #fff;
+}
+.lv .ens-row.stanza.singing { background: rgba(201, 168, 76, 0.06); }
+.lv .ens-row.stanza.resting, .lv .ens-row.stanza.next { opacity: 0.55; }
+.lv .ens-line.older { opacity: 0.45; }
+.lv .ens-line.older .gl-it, .lv .ens-line.older .text { font-size: 15px; }
+.lv .ens-line.older .gl-en, .lv .ens-line.older .translation { font-size: 12px; }
+.lv .ens-line.upcoming { font-style: italic; }
+/* Ensemble card: a passage where several sing at once, in place in the list */
+.lv .ens-card {
+    margin: 12px 0 12px 64px;
+    padding: 6px 0 8px;
+    border-left: 3px solid rgba(201, 168, 76, 0.3);
+    border-radius: 0 8px 8px 0;
+    background: rgba(201, 168, 76, 0.03);
+    transition: opacity 0.3s, background 0.3s, border-color 0.3s;
+    scroll-margin-top: var(--lv-scroll-margin, 0px);
+}
+.lv .ens-card.future { opacity: 0.45; }
+.lv .ens-card.past { opacity: 0.6; }
+.lv .ens-card.active { opacity: 1; border-left-color: #c9a84c; background: rgba(201, 168, 76, 0.07); }
+.lv .ens-card .ens-span {
+    margin-left: 10px; letter-spacing: 0; text-transform: none;
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+}
+.lv .ens-row.still { opacity: 1; }
+@media (max-width: 600px) {
+    .lv { padding: 8px 12px 40vh; }
+    .lv .ens-row { flex-direction: column; gap: 0; }
+    .lv .ens-row .character { text-align: left; min-width: auto; font-size: 12px; }
+    .lv .ens-row .texts { flex-direction: column; gap: 2px; }
+    .lv .ens-row .text { font-size: 16px; }
+    .lv .segment { flex-direction: column; gap: 2px; }
+    .lv .segment .texts { flex-direction: column; gap: 4px; }
+    .lv .segment .character { text-align: left; min-width: auto; }
+    .lv .segment .seg-start { text-align: left; min-width: auto; }
+    .lv .ensemble-group { margin-left: 0; }
+}

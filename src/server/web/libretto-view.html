@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Libretto — Roon Remote Display</title>
+    <link rel="stylesheet" href="/libretto.css">
+    <style>
+        /* The full-page libretto view: a debug header over the shared libretto view. */
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: 'Georgia', 'Times New Roman', serif;
+            background: #1a1a2e;
+            color: #e0e0e0;
+            min-height: 100vh;
+            --lv-scroll-margin: 230px;  /* clear the sticky header */
+        }
+        #header {
+            position: sticky;
+            top: 0;
+            z-index: 100;
+            /* solid except a fixed 24px fade, so a tall header stays opaque */
+            background: linear-gradient(180deg, #1a1a2e calc(100% - 24px), transparent);
+            padding: 16px 24px 28px;
+            border-bottom: 1px solid #2a2a4e;
+        }
+        #libretto-meta { font-size: 13px; color: #666; margin-bottom: 8px; }
+        #libretto-meta .album { color: #888; }
+        #libretto-meta .artist { color: #777; }
+        #roon-track { font-size: 22px; color: #e0e0e0; font-weight: bold; margin-bottom: 4px; }
+        #matched-track { font-size: 15px; color: #c9a84c; margin-bottom: 6px; }
+        #matched-track .label { color: #666; font-size: 12px; }
+        #time-display {
+            font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+            font-size: 16px;
+            color: #aaa;
+            margin-bottom: 4px;
+        }
+        #time-display .current { color: #e0e0e0; font-weight: bold; }
+        #time-display .total { color: #666; }
+        #time-display .seg-time { color: #c9a84c; }
+        #progress-bar { margin-top: 6px; height: 4px; background: #333; border-radius: 2px; overflow: hidden; }
+        #progress-fill { height: 100%; background: #c9a84c; width: 0%; transition: width 0.3s linear; }
+        #status { font-size: 11px; color: #555; margin-top: 6px; }
+        /* Display-option switches */
+        #view-opts {
+            display: flex; flex-wrap: wrap; gap: 6px 18px; margin-top: 8px;
+            font-family: -apple-system, 'Segoe UI', sans-serif; font-size: 12px;
+        }
+        #view-opts .lbl { color: #666; margin-right: 6px; }
+        #view-opts button {
+            background: none; border: 1px solid #3a3a5e; color: #888; padding: 2px 9px;
+            font: inherit; cursor: pointer;
+        }
+        #view-opts button + button { border-left: none; }
+        #view-opts .lbl + button { border-radius: 4px 0 0 4px; }
+        #view-opts button:last-child { border-radius: 0 4px 4px 0; }
+        #view-opts button.on { background: #c9a84c; border-color: #c9a84c; color: #1a1a2e; }
+    </style>
+</head>
+<body>
+    <div id="header">
+        <div id="libretto-meta">Loading libretto...</div>
+        <div id="roon-track">Connecting...</div>
+        <div id="matched-track"></div>
+        <div id="time-display"></div>
+        <div id="progress-bar"><div id="progress-fill"></div></div>
+        <div id="view-opts">
+            <span class="grp"><span class="lbl">Translation</span><button data-opt="translation" data-val="aligned">Aligned</button><button data-opt="translation" data-val="line">Line</button><button data-opt="translation" data-val="off">Off</button></span>
+            <span class="grp"><span class="lbl">Ensemble</span><button data-opt="ensemble" data-val="stanza">Stanza</button><button data-opt="ensemble" data-val="rows">Rows</button></span>
+        </div>
+        <div id="status"></div>
+    </div>
+    <div id="libretto"></div>
+
+    <script src="/libretto.js"></script>
+    <script>
+    const { formatTime, escapeHtml } = LibrettoView;
+    const $ = id => document.getElementById(id);
+
+    const view = LibrettoView.create($('libretto'), { scroller: window, onUpdate: showState });
+
+    // Time, the current line, and the progress bar.
+    function showState(s) {
+        let html = `<span class="current">${formatTime(s.position)}</span>`;
+        html += ` <span class="total">/ ${formatTime(s.length)}</span>`;
+        const tid = s.content?.track_id ? s.content.track_id.toUpperCase() + ': ' : '';
+        if (s.segment) {
+            html += `  &mdash;  <span class="seg-time">${tid}seg ${s.segmentIndex + 1}/${s.segmentCount}`;
+            html += ` @ ${formatTime(s.segment.start)}`;
+            if (s.nextSegment) html += ` &rarr; ${formatTime(s.nextSegment.start)}`;
+            html += `</span>`;
+        } else if (s.inEnsemble) {
+            html += `  &mdash;  <span class="seg-time">${tid}ensemble</span>`;
+        } else if (s.content && tid) {
+            html += `  &mdash;  <span class="seg-time">${tid}seg 0/0</span>`;
+        }
+        if (s.content) $('time-display').innerHTML = html;
+        if (s.length > 0) $('progress-fill').style.width = `${(s.position / s.length) * 100}%`;
+    }
+
+    // Header switches for the display options.
+    function renderOptionButtons() {
+        const o = view.options;
+        document.querySelectorAll('#view-opts button').forEach(b =>
+            b.classList.toggle('on', o[b.dataset.opt] === b.dataset.val));
+    }
+    $('view-opts').addEventListener('click', e => {
+        const b = e.target.closest('button');
+        if (!b) return;
+        view.setOption(b.dataset.opt, b.dataset.val);
+        renderOptionButtons();
+    });
+    renderOptionButtons();
+
+    // The server sends libretto matches and positions for every Roon zone, tagged with
+    // zone_id. This page follows one zone: a playing zone (preferring one whose track
+    // has a libretto), staying on it while it's paused; with nothing playing yet, a zone
+    // whose track has a libretto. Messages for other zones are stored or ignored.
+    const contentByZone = {};   // zone_id -> LibrettoContent or null
+    let activeZoneId = null;
+
+    function pickZone(zones) {
+        const hasContent = z => !!contentByZone[z.zone_id];
+        const playing = zones.filter(z => z.state === 'Playing' && z.track);
+        return playing.find(hasContent) || playing[0]
+            || zones.find(z => z.zone_id === activeZoneId)
+            || zones.find(hasContent) || null;
+    }
+
+    function handleZoneUpdate(zones) {
+        const zone = pickZone(zones);
+        if (!zone) {
+            $('roon-track').textContent = 'Paused or stopped';
+            return;
+        }
+        if (zone.zone_id !== activeZoneId) {
+            // Switch zones: show that zone's match and restart position tracking.
+            activeZoneId = zone.zone_id;
+            view.resetPosition(zone.position_seconds || 0);
+            showContent(contentByZone[activeZoneId] ?? null);
+        }
+        const playingNow = zone.state === 'Playing';
+        $('roon-track').textContent =
+            zone.track ? (playingNow ? zone.track : `${zone.track} (paused)`) : 'Paused or stopped';
+        view.setZone(zone);
+    }
+
+    function handleLibrettoUpdate(msg) {
+        contentByZone[msg.zone_id] = msg.content || null;
+        if (msg.zone_id === activeZoneId) showContent(msg.content || null);
+    }
+
+    function showContent(content) {
+        if (!content) {
+            $('matched-track').innerHTML = `<span class="label">No libretto match for current track</span>`;
+            $('libretto-meta').textContent = '';
+        } else {
+            const opera = content.opera_title || '';
+            const album = content.album || '';
+            const artist = content.artist || '';
+            let metaHtml = '';
+            if (opera) metaHtml += `<span class="album">${escapeHtml(opera)}</span>`;
+            if (album && album !== opera) metaHtml += ` &mdash; <span class="album">${escapeHtml(album)}</span>`;
+            if (artist) metaHtml += ` &mdash; <span class="artist">${escapeHtml(artist)}</span>`;
+            $('libretto-meta').innerHTML = metaHtml;
+            const method = content.match_method || 'server';
+            const segCount = content.segments?.length || 0;
+            $('matched-track').innerHTML =
+                `<span class="label">Matched (${method}):</span> ${escapeHtml(content.track_title)} (${segCount} segments)`;
+        }
+        view.setContent(content);
+    }
+
+    function connectWebSocket() {
+        const protocol = location.protocol === 'https:' ? 'wss:' : 'ws:';
+        const ws = new WebSocket(`${protocol}//${location.host}/ws`);
+        ws.onopen = () => { $('status').textContent = 'Connected'; };
+        ws.onmessage = (event) => {
+            try {
+                const msg = JSON.parse(event.data);
+                if (msg.type === 'zones_changed') {
+                    handleZoneUpdate(msg.now_playing || []);
+                } else if (msg.type === 'libretto_update') {
+                    handleLibrettoUpdate(msg);
+                } else if (msg.type === 'seek_updated') {
+                    if (msg.zone_id === activeZoneId) view.reportPosition(msg.seek_position || 0);
+                } else if (msg.type === 'connection_changed') {
+                    $('status').textContent = msg.connected ? 'Connected to Roon' : 'Roon disconnected';
+                }
+            } catch (e) {
+                console.error('WS parse error:', e);
+            }
+        };
+        ws.onclose = () => {
+            $('status').textContent = 'Disconnected — reconnecting...';
+            setTimeout(connectWebSocket, 3000);
+        };
+        ws.onerror = () => ws.close();
+    }
+
+    connectWebSocket();
+    </script>
+</body>
+</html>
