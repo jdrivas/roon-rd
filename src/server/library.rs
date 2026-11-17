@@ -51,6 +51,8 @@ pub enum MatchMethod {
     AlbumAndTitle,
     /// Matched by album + disc/track number
     AlbumAndNumber,
+    /// Matched by album + track length (the best length_fit)
+    AlbumAndLength,
 }
 
 /// Extracted libretto content for a matched track, sent to the SPA.
@@ -244,31 +246,49 @@ impl LibrettoLibrary {
         disc_number: Option<u32>,
         track_number: Option<u32>,
     ) -> Option<TrackMatch> {
-        log::debug!("match_track: album={:?}, title={:?}, disc={:?}, track_num={:?}",
-            album, track_title, disc_number, track_number);
+        self.match_track_with_length(album, track_title, disc_number, track_number, None)
+    }
 
-        // Step 1: Find candidate files by album name
+    /// Like `match_track`, but when several files match (e.g. two recordings of the same
+    /// opera whose album names and track titles look alike), picks the one whose track
+    /// duration is closest to the playing track's length. Without a length, or when only
+    /// one file matches, the first match wins (exact album matches before fuzzy ones).
+    pub fn match_track_with_length(
+        &self,
+        album: Option<&str>,
+        track_title: Option<&str>,
+        disc_number: Option<u32>,
+        track_number: Option<u32>,
+        length_seconds: Option<f64>,
+    ) -> Option<TrackMatch> {
+        log::debug!("match_track: album={:?}, title={:?}, disc={:?}, track_num={:?}, length={:?}",
+            album, track_title, disc_number, track_number, length_seconds);
+
+        // Step 1: Find candidate files by album name: exact matches first, then fuzzy ones
+        // (the Roon album contains, or is contained by, an indexed album name).
         let normalized_album = album.map(normalize_album);
+        let mut exact_ids: Vec<&str> = Vec::new();
         let mut candidate_file_ids: Vec<&str> = if let Some(ref norm) = normalized_album {
-            // Try exact match first
             let exact = self.album_index
                 .get(norm)
                 .map(|entries| entries.iter().map(|e| e.file_id.as_str()).collect::<Vec<_>>())
                 .unwrap_or_default();
-            if !exact.is_empty() {
-                log::debug!("  album exact match: {:?} -> {:?}", norm, exact);
-                exact
-            } else {
-                // Fuzzy: check if the Roon album contains or is contained by an indexed album
-                let fuzzy: Vec<&str> = self.album_index.iter()
-                    .filter(|(indexed, _)| norm.contains(indexed.as_str()) || indexed.contains(norm.as_str()))
-                    .flat_map(|(_, entries)| entries.iter().map(|e| e.file_id.as_str()))
-                    .collect();
-                if !fuzzy.is_empty() {
-                    log::debug!("  album fuzzy match: {:?} -> {:?}", norm, fuzzy);
-                }
-                fuzzy
+            let fuzzy: Vec<&str> = self.album_index.iter()
+                .filter(|(indexed, _)| indexed.as_str() != norm
+                    && (norm.contains(indexed.as_str()) || indexed.contains(norm.as_str())))
+                .flat_map(|(_, entries)| entries.iter().map(|e| e.file_id.as_str()))
+                .collect();
+            if !exact.is_empty() || !fuzzy.is_empty() {
+                log::debug!("  album match: {:?} -> exact {:?}, fuzzy {:?}", norm, exact, fuzzy);
             }
+            exact_ids = exact.clone();
+            let mut ids = exact;
+            for id in fuzzy {
+                if !ids.contains(&id) {
+                    ids.push(id);
+                }
+            }
+            ids
         } else {
             // No album info — try all files
             self.librettos.keys().map(|s| s.as_str()).collect()
@@ -285,49 +305,208 @@ impl LibrettoLibrary {
             candidate_file_ids = self.librettos.keys().map(|s| s.as_str()).collect();
         }
 
-        // Step 2: Within candidate files, find the best track match
+        // Step 2: Within each candidate file, find its best track match.
+        let mut found: Vec<TrackMatch> = Vec::new();
         for file_id in &candidate_file_ids {
-            if let Some(libretto) = self.librettos.get(*file_id) {
-                if let Some(tracks) = libretto.json.get("tracks").and_then(|t| t.as_array()) {
-                    // Try disc_number + track_number match first (most reliable)
-                    // but ONLY if album was matched — disc/track numbers are ambiguous across operas
-                    if album_matched {
-                        if let (Some(disc), Some(track_num)) = (disc_number, track_number) {
-                            for (i, track) in tracks.iter().enumerate() {
-                                let t_disc = track.get("disc_number").and_then(|d| d.as_u64()).map(|d| d as u32);
-                                let t_num = track.get("track_number").and_then(|n| n.as_u64()).map(|n| n as u32);
-                                if t_disc == Some(disc) && t_num == Some(track_num) {
-                                    return Some(TrackMatch {
-                                        file_id: file_id.to_string(),
-                                        track_index: i,
-                                        match_method: MatchMethod::AlbumAndNumber,
-                                    });
-                                }
-                            }
-                        }
-                    }
+            if let Some(m) = self.match_in_file(file_id, album_matched, exact_ids.contains(file_id), track_title, disc_number, track_number, length_seconds) {
+                if length_seconds.is_none() {
+                    return Some(m);  // no way to tell recordings apart: first match wins
+                }
+                found.push(m);
+            }
+        }
+        // Album names of different releases of the same opera vary ("Wolfgang Amadeus
+        // Mozart : Le Nozze di Figaro" vs "Mozart: Le nozze di Figaro, K. 492"), so the
+        // album step can keep another recording's file and drop this one's. With a length
+        // to tell recordings apart, files outside the album candidates may also match by
+        // title; step 3 then chooses by length.
+        if album_matched && length_seconds.is_some() {
+            let mut others: Vec<&str> = self.librettos.keys().map(|s| s.as_str())
+                .filter(|id| !candidate_file_ids.contains(id)).collect();
+            others.sort();
+            for file_id in others {
+                if let Some(m) = self.match_in_file(file_id, false, false, track_title, disc_number, track_number, length_seconds) {
+                    found.push(m);
+                }
+            }
+        }
+        if found.is_empty() {
+            log::debug!("  no track match found in {} candidate file(s)", candidate_file_ids.len());
+            return None;
+        }
 
-                    // Title matching (always tried — works across album mismatches)
-                    if let Some(title) = track_title {
-                        let norm_title = normalize_title(title);
-                        for (i, track) in tracks.iter().enumerate() {
-                            if let Some(t_title) = track.get("title").and_then(|t| t.as_str()) {
-                                if titles_match(&norm_title, &normalize_title(t_title)) {
-                                    return Some(TrackMatch {
-                                        file_id: file_id.to_string(),
-                                        track_index: i,
-                                        match_method: MatchMethod::AlbumAndTitle,
-                                    });
-                                }
-                            }
+        // A track titled exactly like Roon's beats other files' matches (Currentzis's "Se vuol
+        // ballare", 160.28 s, lost to a 160.33 s Solti recitative on length alone).
+        if found.len() > 1 {
+            if let Some(title) = track_title {
+                let roon_norm = normalize_text(title);
+                let exact: Vec<TrackMatch> = found.iter().filter(|m| self.track_title_of(m)
+                    .map(normalize_text).as_deref() == Some(roon_norm.as_str())).cloned().collect();
+                if !exact.is_empty() {
+                    found = exact;
+                }
+            }
+        }
+        // Else a file the album names exactly (its album_title or an alias) with a track that
+        // fits the playing length is this recording, and its match beats other files'
+        // (Currentzis's 228.8 s Act II finale beat Solti's 228.96 s "Va là" for Roon's 228 s).
+        // An exact album alone isn't enough: Roon has named a Currentzis album exactly like
+        // Solti's file, which is why exact titles come first.
+        if found.len() > 1 {
+            if let Some(len) = length_seconds {
+                let exact: Vec<TrackMatch> = found.iter().filter(|m| exact_ids.contains(&m.file_id.as_str())
+                    && self.track_duration(m).and_then(|d| length_fit(d, len)).is_some()).cloned().collect();
+                if !exact.is_empty() {
+                    found = exact;
+                }
+            }
+        }
+
+        // Step 3: Several files match: prefer the track whose duration is closest to the
+        // playing track's length (files without a duration rank last).
+        if found.len() > 1 {
+            let len = length_seconds.unwrap_or_default();
+            // A track that fits the length (length_fit) before one that doesn't, then closest.
+            let gap = |m: &TrackMatch| self.track_duration(m)
+                .map(|d| length_fit(d, len).unwrap_or(1e6 + (d - len).abs())).unwrap_or(f64::MAX);
+            let best = found.iter()
+                .min_by(|a, b| gap(a).partial_cmp(&gap(b)).unwrap_or(std::cmp::Ordering::Equal))
+                .cloned()?;
+            log::info!("Libretto: {} files match {:?}; chose {} by track length ({:.0} s vs {:.0} s)",
+                found.len(), track_title.unwrap_or(""), best.file_id,
+                self.track_duration(&best).unwrap_or(f64::NAN), len);
+            return Some(best);
+        }
+        found.into_iter().next()
+    }
+
+    /// Duration (seconds) of a matched track, from its interchange `duration_seconds`.
+    fn track_duration(&self, m: &TrackMatch) -> Option<f64> {
+        self.librettos.get(&m.file_id)?
+            .json.get("tracks")?.as_array()?
+            .get(m.track_index)?
+            .get("duration_seconds")?.as_f64()
+    }
+
+    fn track_title_of(&self, m: &TrackMatch) -> Option<&str> {
+        self.librettos.get(&m.file_id)?
+            .json.get("tracks")?.as_array()?
+            .get(m.track_index)?
+            .get("title")?.as_str()
+    }
+
+    /// Best track match within one file: disc + track number (only when the album matched,
+    /// since numbers are ambiguous across operas), else scored title matching.
+    fn match_in_file(
+        &self,
+        file_id: &str,
+        album_matched: bool,
+        album_exact: bool,
+        track_title: Option<&str>,
+        disc_number: Option<u32>,
+        track_number: Option<u32>,
+        length_seconds: Option<f64>,
+    ) -> Option<TrackMatch> {
+        let tracks = self.librettos.get(file_id)?.json.get("tracks")?.as_array()?;
+        if album_matched {
+            if let (Some(disc), Some(track_num)) = (disc_number, track_number) {
+                let mut numbered = false;
+                for (i, track) in tracks.iter().enumerate() {
+                    let t_disc = track.get("disc_number").and_then(|d| d.as_u64()).map(|d| d as u32);
+                    let t_num = track.get("track_number").and_then(|n| n.as_u64()).map(|n| n as u32);
+                    numbered |= t_disc.is_some() && t_num.is_some();
+                    if t_disc == Some(disc) && t_num == Some(track_num) {
+                        return Some(TrackMatch {
+                            file_id: file_id.to_string(),
+                            track_index: i,
+                            match_method: MatchMethod::AlbumAndNumber,
+                        });
+                    }
+                }
+                // The album matched and the file numbers its tracks, but has no such track:
+                // the track isn't in this file. Don't fall back to titles: tracks of one
+                // recording share a long title prefix ("Le nozze di Figaro, K. 492: Atto
+                // Terzo:"), which matched a track the file lacks to another track's text.
+                if numbered {
+                    log::debug!("  no disc {} track {} in {}; not matching by title", disc, track_num, file_id);
+                    return None;
+                }
+            }
+        }
+
+        let found = |i: usize, method: MatchMethod| Some(TrackMatch {
+            file_id: file_id.to_string(),
+            track_index: i,
+            match_method: method,
+        });
+
+        // A track titled exactly like Roon's (ignoring case and punctuation) wins outright:
+        // files made from a recording's own metadata copy Roon's titles, and those share a
+        // long opera prefix that the fragment scoring can't tell apart.
+        if let Some(title) = track_title {
+            let roon_norm = normalize_text(title);
+            if let Some(i) = tracks.iter().position(|t| {
+                t.get("title").and_then(|t| t.as_str()).map(normalize_text).as_deref() == Some(roon_norm.as_str())
+            }) {
+                log::debug!("  exact title match: file={} track={}", file_id, i);
+                return found(i, MatchMethod::AlbumAndTitle);
+            }
+        }
+
+        // The tracks whose length fits the playing one (length_fit), best first. When the
+        // album names this file exactly (album_title or an alias; a loose album match is too
+        // weak: Solti's file matches Currentzis's album loosely) and only one fits, it is the track, whatever its title: a recording's
+        // own titles (from its files) can be worded unlike Roon's (Solti's box set: "No. 5,
+        // Duet. Via resti servita – …" for Roon's "Recitativo \"Va là, vecchia pedante\"").
+        // Several can fit (Currentzis's many short tracks); titles then choose among them.
+        let mut fits: Vec<(f64, usize)> = match length_seconds {
+            Some(len) => tracks.iter().enumerate()
+                .filter_map(|(i, t)| t.get("duration_seconds").and_then(|d| d.as_f64())
+                    .and_then(|d| length_fit(d, len)).map(|fit| (fit, i)))
+                .collect(),
+            None => Vec::new(),
+        };
+        fits.sort_by(|a, b| a.0.partial_cmp(&b.0).unwrap_or(std::cmp::Ordering::Equal));
+        if album_exact && fits.len() == 1 {
+            log::debug!("  length match: file={} track={}", file_id, fits[0].1);
+            return found(fits[0].1, MatchMethod::AlbumAndLength);
+        }
+
+        // Title matching using parsed title structure (scored, picks best). Among title
+        // matches, a track whose length fits wins over a better-scoring title: several tracks
+        // can score, and the best score can be the wrong track (Solti's overture for "Voi
+        // che sapete").
+        let mut best_score = 0u32;
+        let mut best_index = None;
+        let mut best_by_length: Option<(u32, usize)> = None;
+        if let Some(title) = track_title {
+            let roon_parsed = parse_roon_title(title);
+            for (i, track) in tracks.iter().enumerate() {
+                if let Some(t_title) = track.get("title").and_then(|t| t.as_str()) {
+                    if let Some(score) = parsed_titles_match(&roon_parsed, &parse_ic_title(t_title)) {
+                        if score > best_score {
+                            best_score = score;
+                            best_index = Some(i);
+                        }
+                        if fits.iter().any(|&(_, j)| j == i) && best_by_length.map_or(true, |(s, _)| score > s) {
+                            best_by_length = Some((score, i));
                         }
                     }
                 }
             }
         }
-
-        log::debug!("  no track match found in {} candidate file(s)", candidate_file_ids.len());
-        None
+        if let Some((score, i)) = best_by_length {
+            log::debug!("  title and length match: file={} track={} score={}", file_id, i, score);
+            return found(i, MatchMethod::AlbumAndTitle);
+        }
+        // Several fit and no title among them matches: the best fit.
+        if album_exact && !fits.is_empty() {
+            log::debug!("  length match (of {}): file={} track={}", fits.len(), file_id, fits[0].1);
+            return found(fits[0].1, MatchMethod::AlbumAndLength);
+        }
+        let idx = best_index?;
+        log::debug!("  title match: file={} track={} score={}", file_id, idx, best_score);
+        found(idx, MatchMethod::AlbumAndTitle)
     }
 
     /// Extract the full libretto content for a matched track.
@@ -376,8 +555,9 @@ impl LibrettoLibrary {
         track_title: Option<&str>,
         disc_number: Option<u32>,
         track_number: Option<u32>,
+        length_seconds: Option<f64>,
     ) -> Option<LibrettoContent> {
-        let track_match = self.match_track(album, track_title, disc_number, track_number)?;
+        let track_match = self.match_track_with_length(album, track_title, disc_number, track_number, length_seconds)?;
         self.extract_track_content(&track_match)
     }
 
@@ -428,6 +608,20 @@ fn find_interchange_files_recursive(dir: &Path, files: &mut Vec<PathBuf>) -> Res
         }
     }
     Ok(())
+}
+
+/// How far a track's duration (seconds) can be from Roon's length for it to be the playing
+/// track: Roon truncates lengths to whole seconds (228.96 s is reported as 228), so a track
+/// lasts from the reported length to a second more (0.01 s below allows for rounding).
+/// Solti's 227.0 s "La vendetta" is then not his 226 s finale (226.16 s).
+const LENGTH_FIT_BELOW_S: f64 = 0.01;
+const LENGTH_FIT_ABOVE_S: f64 = 1.0;
+
+/// How well a track of `dur` seconds fits Roon's reported `len`: its distance from the
+/// middle of the truncation window (smaller is better), or None if it doesn't fit.
+fn length_fit(dur: f64, len: f64) -> Option<f64> {
+    let gap = dur - len;
+    (gap >= -LENGTH_FIT_BELOW_S && gap < LENGTH_FIT_ABOVE_S).then(|| (gap - 0.5).abs())
 }
 
 /// Normalize an album name for matching: lowercase, collapse whitespace, strip punctuation.
@@ -563,6 +757,284 @@ fn extract_quoted(s: &str) -> Option<&str> {
     Some(&rest[..end])
 }
 
+/// Parsed representation of a track title, extracted from either Roon or interchange format.
+/// Contains structured fields that can be compared independently for scoring.
+#[derive(Debug, Clone)]
+struct ParsedTitle {
+    /// Act number: "1", "2", "3", "4"
+    act: Option<String>,
+    /// Opera number (e.g., 1 from "No. 1")
+    number: Option<u32>,
+    /// Type label normalized: "duet", "aria", "trio", "finale", "recitativo", etc.
+    type_label: Option<String>,
+    /// Normalized text fragments — the actual sung/spoken text
+    text_fragments: Vec<String>,
+}
+
+/// Normalize a text fragment for comparison: lowercase, keep only alphanumeric + spaces.
+fn normalize_text(s: &str) -> String {
+    s.to_lowercase()
+        .chars()
+        .filter(|c| c.is_alphanumeric() || c.is_whitespace())
+        .collect::<String>()
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+/// Parse a Roon track title into structured components.
+///
+/// Roon opera titles typically look like:
+///   "Le nozze di Figaro, K. 492, Act I: No. 1, Duet. Cinque, dieci, venti \u{2013} Cosa stai misurando"
+///   "Le nozze di Figaro, K. 492, Act II: Recit. Che novità!"
+///   "Le nozze di Figaro, K. 492: Overture"
+fn parse_roon_title(raw: &str) -> ParsedTitle {
+    let mut act = None;
+    let mut number = None;
+    let mut type_label = None;
+
+    // Extract act from the opera prefix before stripping
+    for (prefix, act_val) in &[
+        ("Act IV", "4"), ("Act III", "3"), ("Act II", "2"), ("Act I", "1"),
+        ("Akt IV", "4"), ("Akt III", "3"), ("Akt II", "2"), ("Akt I", "1"),
+        ("Atto IV", "4"), ("Atto III", "3"), ("Atto II", "2"), ("Atto I", "1"),
+    ] {
+        if raw.contains(prefix) {
+            act = Some(act_val.to_string());
+            break;
+        }
+    }
+
+    // Strip opera prefix (e.g., "Le nozze di Figaro, K. 492, Act I: ")
+    let stripped = strip_opera_prefix(raw);
+
+    // Extract first "No. N" found anywhere
+    let mut s = stripped.to_string();
+    if let Some(pos) = s.find("No. ") {
+        let after = &s[pos + 4..];
+        let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = num_str.parse::<u32>() {
+            number = Some(n);
+        }
+    }
+
+    // Remove all "No. N," or "No. N " occurrences to get to the text
+    while let Some(pos) = s.find("No. ") {
+        let rest = &s[pos + 4..];
+        let digits_end = rest.find(|c: char| !c.is_ascii_digit()).unwrap_or(rest.len());
+        let mut remove_end = pos + 4 + digits_end;
+        // Also consume trailing comma and/or space
+        let remaining = &s[remove_end..];
+        if remaining.starts_with(", ") {
+            remove_end += 2;
+        } else if remaining.starts_with(',') {
+            remove_end += 1;
+        } else if remaining.starts_with(' ') {
+            remove_end += 1;
+        }
+        s = format!("{}{}", &s[..pos], &s[remove_end..]);
+    }
+
+    // Extract and remove type labels (longest first to avoid partial matches)
+    let labels = [
+        ("Recitativo ed Aria:", "recitativo ed aria"),
+        ("Recit.", "recitativo"),
+        ("Duet.", "duet"),
+        ("Trio.", "trio"),
+        ("Sextet.", "sextet"),
+        ("Chorus.", "chorus"),
+        ("Cavatina:", "cavatina"),
+        ("Aria.", "aria"),
+        ("Finale:", "finale"),
+    ];
+    for (label, norm) in &labels {
+        if s.contains(label) {
+            if type_label.is_none() {
+                type_label = Some(norm.to_string());
+            }
+            s = s.replace(label, "");
+        }
+    }
+
+    // Remove finale part labels like "a-c." "d-g." "e-g."
+    let mut cleaned = String::new();
+    let chars: Vec<char> = s.chars().collect();
+    let mut i = 0;
+    while i < chars.len() {
+        if i + 2 < chars.len()
+            && chars[i].is_ascii_lowercase()
+            && chars[i + 1] == '-'
+            && chars[i + 2].is_ascii_lowercase()
+        {
+            i += 3; // skip "a-c"
+            if i < chars.len() && chars[i] == '.' {
+                i += 1; // skip "."
+            }
+            while i < chars.len() && chars[i] == ' ' {
+                i += 1; // skip trailing spaces
+            }
+        } else {
+            cleaned.push(chars[i]);
+            i += 1;
+        }
+    }
+    s = cleaned;
+
+    // Split on em-dash ' \u{2013} ' or regular dash ' - ' to get text fragments
+    let fragments: Vec<String> = s
+        .split(" \u{2013} ")
+        .flat_map(|part| part.split(" - "))
+        .map(|f| normalize_text(f.trim()))
+        .filter(|f| f.len() >= 3)
+        .collect();
+
+    ParsedTitle { act, number, type_label, text_fragments: fragments }
+}
+
+/// Parse an interchange file track title into structured components.
+///
+/// IC titles look like:
+///   'No. 1 Duetto "Cinque...dieci...venti" (Figaro, Susanna); recitativo "Cosa stai misurando"'
+///   'Recitativo "Che novità!" (Conte, Contessa)'
+///   'No. 15 Finale, Part 1: "Esci, ormai, garzon malnato" (Conte, Contessa, Susanna)'
+///   'Sinfonia'
+fn parse_ic_title(raw: &str) -> ParsedTitle {
+    let mut number = None;
+    let mut type_label = None;
+
+    // Extract "No. N"
+    if let Some(pos) = raw.find("No. ") {
+        let after = &raw[pos + 4..];
+        let num_str: String = after.chars().take_while(|c| c.is_ascii_digit()).collect();
+        if let Ok(n) = num_str.parse::<u32>() {
+            number = Some(n);
+        }
+    }
+
+    // Extract type label from IC format
+    let lc = raw.to_lowercase();
+    let type_patterns = [
+        ("finale", "finale"),
+        ("duettino", "duet"), ("duetto", "duet"),
+        ("terzetto", "trio"),
+        ("sestetto", "sextet"),
+        ("cavatina", "cavatina"),
+        ("canzona", "aria"),
+        ("aria", "aria"),
+        ("coro", "chorus"),
+        ("recitativo", "recitativo"),
+    ];
+    for (pattern, norm) in &type_patterns {
+        if lc.contains(pattern) {
+            type_label = Some(norm.to_string());
+            break;
+        }
+    }
+
+    // Extract all quoted text fragments
+    let mut fragments = Vec::new();
+    let mut search = raw;
+    while let Some(start) = search.find('"') {
+        let rest = &search[start + 1..];
+        if let Some(end) = rest.find('"') {
+            let quoted = &rest[..end];
+            let normalized = normalize_text(quoted);
+            if normalized.len() >= 3 {
+                fragments.push(normalized);
+            }
+            search = &rest[end + 1..];
+        } else {
+            break;
+        }
+    }
+
+    // If no quoted text found, normalize the whole title as a single fragment
+    // (handles "Sinfonia" and similar simple titles)
+    if fragments.is_empty() {
+        let normalized = normalize_text(raw);
+        if normalized.len() >= 3 {
+            fragments.push(normalized);
+        }
+    }
+
+    // IC titles don't usually embed act info (it's in a separate JSON field)
+    ParsedTitle { act: None, number, type_label, text_fragments: fragments }
+}
+
+/// Score how well a roon text fragment matches against a set of IC text fragments.
+/// Returns the best score found (0 if no match).
+fn best_fragment_score(roon_frag: &str, ic_fragments: &[String]) -> u32 {
+    let rw: Vec<&str> = roon_frag.split_whitespace().collect();
+    let mut best = 0u32;
+
+    for ic_frag in ic_fragments {
+        let iw: Vec<&str> = ic_frag.split_whitespace().collect();
+
+        // 3-word prefix of roon fragment found in IC fragment
+        if rw.len() >= 3 {
+            let probe = format!("{} {} {}", rw[0], rw[1], rw[2]);
+            if probe.len() >= 6 && ic_frag.contains(&probe) {
+                best = best.max(3);
+                continue;
+            }
+        }
+        // 3-word prefix of IC fragment found in roon fragment
+        if iw.len() >= 3 {
+            let probe = format!("{} {} {}", iw[0], iw[1], iw[2]);
+            if probe.len() >= 6 && roon_frag.contains(&probe) {
+                best = best.max(3);
+                continue;
+            }
+        }
+
+        // 2-word consecutive pairs from roon (handles first-word spelling variants)
+        let mut found = false;
+        for window in rw.windows(2) {
+            let probe = format!("{} {}", window[0], window[1]);
+            if probe.len() >= 6 && ic_frag.contains(&probe) {
+                best = best.max(2);
+                found = true;
+                break;
+            }
+        }
+        if found { continue; }
+
+        // 2-word consecutive pairs from IC
+        for window in iw.windows(2) {
+            let probe = format!("{} {}", window[0], window[1]);
+            if probe.len() >= 6 && roon_frag.contains(&probe) {
+                best = best.max(2);
+                break;
+            }
+        }
+    }
+
+    best
+}
+
+/// Compare two ParsedTitles and return a match score.
+/// Returns None if no match, Some(score) if matched. Higher score = better match.
+/// Currently only implements text fragment comparison.
+fn parsed_titles_match(roon: &ParsedTitle, ic: &ParsedTitle) -> Option<u32> {
+    // Special case: overture/sinfonia synonyms
+    let overture_words = ["sinfonia", "overture", "ouverture", "ouvertura", "preludio"];
+    let roon_is_overture = roon.text_fragments.iter()
+        .any(|f| overture_words.iter().any(|w| f.contains(w)));
+    let ic_is_overture = ic.text_fragments.iter()
+        .any(|f| overture_words.iter().any(|w| f.contains(w)));
+    if roon_is_overture && ic_is_overture {
+        return Some(10);
+    }
+
+    // Score each roon fragment against IC fragments
+    let mut total_score = 0u32;
+    for rf in &roon.text_fragments {
+        total_score += best_fragment_score(rf, &ic.text_fragments);
+    }
+
+    if total_score > 0 { Some(total_score) } else { None }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -621,6 +1093,192 @@ mod tests {
             .map(|s| s.strip_suffix(".interchange").unwrap_or(s).to_string())
             .unwrap();
         assert_eq!(file_id, "georg-solti-1981");
+    }
+
+    #[test]
+    fn test_two_recordings_told_apart_by_length() {
+        // Two recordings of the same opera: Roon reports an album name that exactly
+        // matches one file and fuzzily the other, and the titles share their text.
+        let dir = std::env::temp_dir().join("roon-rd-test-two-recordings");
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, album: &str, title: &str, dur: f64| {
+            std::fs::write(dir.join(format!("{name}.interchange.json")), format!(r#"{{
+                "version": "1.0",
+                "opera": {{ "title": "Le nozze di Figaro" }},
+                "recording": {{ "album_title": "{album}" }},
+                "tracks": [{{ "track_id": "t1", "title": "{title}", "duration_seconds": {dur},
+                              "segments": [{{ "start": 0.0, "text": "Riconosci" }}] }}]
+            }}"#)).unwrap();
+        };
+        write("solti", "Mozart: Le Nozze di Figaro",
+              "No. 19 Sestetto: Riconosci in questo amplesso", 393.0);
+        write("currentzis", "Mozart: Le nozze di Figaro, K. 492",
+              "Riconosci in questo amplesso (No. 19, Sestetto)", 342.6);
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let roon = (Some("Mozart: Le Nozze di Figaro"),
+                    Some("Le Nozze di Figaro: Act 3. Scene 5. No. 19 Sestetto: Riconosci in questo amplesso"));
+
+        let m = lib.match_track_with_length(roon.0, roon.1, None, None, Some(342.0)).unwrap();
+        assert_eq!(m.file_id, "currentzis");
+        let m = lib.match_track_with_length(roon.0, roon.1, None, None, Some(393.0)).unwrap();
+        assert_eq!(m.file_id, "solti");
+        // Without a length, the exact album match wins (previous behaviour).
+        assert_eq!(lib.match_track(roon.0, roon.1, None, None).unwrap().file_id, "solti");
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_recording_whose_album_name_does_not_match() {
+        // Real case (2026-11-07): Roon calls the Currentzis album "Wolfgang Amadeus
+        // Mozart : Le Nozze di Figaro". That contains Solti's album name but not the
+        // Currentzis file's, so only Solti's file passed the album step.
+        let dir = std::env::temp_dir().join("roon-rd-test-album-mismatch");
+        std::fs::create_dir_all(&dir).unwrap();
+        let write = |name: &str, album: &str, tracks: &str| {
+            std::fs::write(dir.join(format!("{name}.interchange.json")), format!(r#"{{
+                "version": "1.0",
+                "opera": {{ "title": "Le nozze di Figaro" }},
+                "recording": {{ "album_title": "{album}" }},
+                "tracks": [{tracks}]
+            }}"#)).unwrap();
+        };
+        let seg = r#""segments": [{ "start": 0.0, "text": "x" }]"#;
+        write("solti", "Mozart: Le Nozze di Figaro", &format!(
+            r#"{{ "track_id": "d2t10", "disc_number": 2, "track_number": 10, "duration_seconds": 390.0,
+                 "title": "No. 18 Sestetto \"Riconosci in questo amplesso\" (Marcellina, Susanna, Figaro)", {seg} }}"#));
+        write("currentzis", "Mozart: Le nozze di Figaro, K. 492", &format!(
+            r#"{{ "track_id": "d1t50", "disc_number": 1, "track_number": 50, "duration_seconds": 342.6,
+                 "title": "Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto: Susanna, Marcellina, Don Curzio, Il Conte, Bartolo, Figaro)", {seg} }},
+               {{ "track_id": "d1t51", "disc_number": 1, "track_number": 51, "duration_seconds": 75.6,
+                 "title": "Le nozze di Figaro, K. 492: Atto Terzo: Eccovi, oh caro amico (Recitativo: Marcellina, Bartolo, Susanna, Figaro)", {seg} }}"#));
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Wolfgang Amadeus Mozart : Le Nozze di Figaro");
+        let sextet = Some("Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto: Susanna, Marcellina, Don Curzio, Il Conte, Bartolo, Figaro)");
+        let recit = Some("Le nozze di Figaro, K. 492: Atto Terzo: Eccovi, oh caro amico (Recitativo: Marcellina, Bartolo, Susanna, Figaro)");
+
+        let m = lib.match_track_with_length(album, sextet, Some(1), Some(50), Some(342.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("currentzis", 0));
+        let m = lib.match_track_with_length(album, recit, Some(1), Some(51), Some(76.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("currentzis", 1));
+
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_track_missing_from_its_file_is_not_matched_by_title() {
+        // Real case (2026-11-08): Currentzis's track 52 ("Andiam, bel paggio") was not in
+        // the file, and its shared title prefix matched the Sextet's track instead.
+        let dir = std::env::temp_dir().join("roon-rd-test-missing-track");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("currentzis.interchange.json"), r#"{
+            "version": "1.1-score",
+            "opera": { "title": "Le nozze di Figaro" },
+            "recording": { "album_title": "Mozart: Le nozze di Figaro, K. 492" },
+            "tracks": [{ "track_id": "d1t50", "disc_number": 1, "track_number": 50, "duration_seconds": 342.6,
+                         "title": "Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto)",
+                         "segments": [{ "start": 0.0, "text": "Riconosci" }] }]
+        }"#).unwrap();
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Mozart: Le nozze di Figaro, K. 492");
+        let andiam = Some("Le nozze di Figaro, K. 492: Atto Terzo: Andiam, bel paggio (Recitativo: Barbarina, Cherubino)");
+        assert!(lib.match_track_with_length(album, andiam, Some(1), Some(52), Some(48.0)).is_none());
+        // The track the file has still matches by number.
+        let sextet = Some("Le nozze di Figaro, K. 492: Atto Terzo: Riconosci in questo amplesso (No. 19, Sestetto)");
+        let m = lib.match_track_with_length(album, sextet, Some(1), Some(50), Some(342.0)).unwrap();
+        assert_eq!(m.track_index, 0);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_track_of_the_playing_length_wins_among_title_matches() {
+        // Real case (2026-11-12): Solti's file carries the FLAC tags' titles, worded unlike
+        // Roon's; for "Voi che sapete" (233 s) the best title score was the overture (231 s).
+        let dir = std::env::temp_dir().join("roon-rd-test-length-among-titles");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("solti.interchange.json"), r#"{
+            "version": "1.1-score",
+            "opera": { "title": "Le nozze di Figaro" },
+            "recording": { "album_title": "Mozart: Le Nozze di Figaro", "album_title_aliases": ["Solti: The Operas - Mozart"] },
+            "tracks": [
+              { "track_id": "d1t1", "disc_number": 1, "track_number": 1, "duration_seconds": 231.2,
+                "title": "Le nozze di Figaro, K. 492 Mozart: Le nozze di Figaro, K. 492: Overture", "segments": [] },
+              { "track_id": "d1t11", "disc_number": 1, "track_number": 11, "duration_seconds": 233.4,
+                "title": "Le nozze di Figaro, K. 492, Act II Mozart: Le nozze di Figaro, K. 492, Act II: No. 12, Voi che sapete – Bravo! che bella voce!",
+                "segments": [{ "start": 0.0, "text": "Voi che sapete" }] },
+              { "track_id": "d2t6", "disc_number": 2, "track_number": 6, "duration_seconds": 226.16,
+                "title": "Le nozze di Figaro, K. 492, Act II Mozart: Le nozze di Figaro, K. 492, Act II: No. 16, Finale: h-i. Voi signor, che giusto siete",
+                "segments": [{ "start": 0.0, "text": "Voi signor" }] }]
+        }"#).unwrap();
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Solti: The Operas - Mozart");
+        let voi = Some("Le nozze di Figaro, K. 492: Act II, Scene II. No. 12 Arietta \"Voi che sapete che cosa è amor\" (Cherubino)");
+        let m = lib.match_track_with_length(album, voi, None, None, Some(233.0)).unwrap();
+        assert_eq!(m.track_index, 1);
+        let fin = Some("Le nozze di Figaro, K. 492: Act II, Scene XI. No. 16 Finale \"Voi signor che giusto siete\" (Il Conte, La Contessa, Susanna)");
+        let m = lib.match_track_with_length(album, fin, None, None, Some(226.0)).unwrap();
+        assert_eq!(m.track_index, 2);
+        std::fs::remove_dir_all(&dir).ok();
+    }
+
+    #[test]
+    fn test_exact_album_and_closest_length_choose_the_track() {
+        // Real cases (2026-11-12, both recordings loaded, Act I built):
+        // - Roon's 226 s finale: Solti's 227.0 s "La vendetta" was within a second too, and
+        //   scored the better title; the closest length (226.2 s) is the finale.
+        // - Roon's 228 s "Va là, vecchia pedante": Solti's track (228.96 s) titles it "No. 5,
+        //   Duet. Via resti servita – …", and Currentzis's 228.8 s Act II finale won by
+        //   length; Roon's album names Solti's file exactly, so Solti's track wins.
+        let dir = std::env::temp_dir().join("roon-rd-test-exact-album-length");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("solti.interchange.json"), r#"{
+            "version": "1.1-score",
+            "opera": { "title": "Le nozze di Figaro" },
+            "recording": { "album_title": "Mozart: Le Nozze di Figaro", "album_title_aliases": ["Solti: The Operas - Mozart"] },
+            "tracks": [
+              { "track_id": "d1t5", "disc_number": 1, "track_number": 5, "duration_seconds": 227.0,
+                "title": "Le nozze di Figaro, K. 492, Act I Mozart: Le nozze di Figaro, K. 492, Act I: No. 4, La vendetta – Tutto ancor non ho perso",
+                "segments": [{ "start": 0.0, "text": "La vendetta" }] },
+              { "track_id": "d1t6", "disc_number": 1, "track_number": 6, "duration_seconds": 228.96,
+                "title": "Le nozze di Figaro, K. 492, Act I Mozart: Le nozze di Figaro, K. 492, Act I: No. 5, Duet. Via resti servita – Va là, vecchia pedante",
+                "segments": [{ "start": 0.0, "text": "Via resti servita" }] },
+              { "track_id": "d2t6", "disc_number": 2, "track_number": 6, "duration_seconds": 226.16,
+                "title": "Le nozze di Figaro, K. 492, Act II Mozart: Le nozze di Figaro, K. 492, Act II: No. 16, Finale: h-i. Voi signor, che giusto siete",
+                "segments": [{ "start": 0.0, "text": "Voi signor" }] },
+              { "track_id": "d2t3", "disc_number": 2, "track_number": 3, "duration_seconds": 160.333,
+                "title": "Le nozze di Figaro, K. 492, Act II Mozart: Le nozze di Figaro, K. 492, Act II: Recit. Esci omai, garzon malnato",
+                "segments": [] }]
+        }"#).unwrap();
+        std::fs::write(dir.join("currentzis.interchange.json"), r#"{
+            "version": "1.1-score",
+            "opera": { "title": "Le nozze di Figaro" },
+            "recording": { "album_title": "Mozart: Le nozze di Figaro, K. 492" },
+            "tracks": [
+              { "track_id": "d1t12", "disc_number": 1, "track_number": 12, "duration_seconds": 125.4,
+                "title": "Le nozze di Figaro, K. 492: Atto Primo: Va' là, vecchia pedante (Recitativo: Susanna, Cherubino)",
+                "segments": [] },
+              { "track_id": "d1t7", "disc_number": 1, "track_number": 7, "duration_seconds": 160.28,
+                "title": "Le nozze di Figaro, K. 492: Atto Primo: Se vuol ballare signor Contino (No. 3, Cavatina: Figaro)",
+                "segments": [{ "start": 0.0, "text": "Se vuol ballare" }] },
+              { "track_id": "d1t42", "disc_number": 1, "track_number": 42, "duration_seconds": 228.8,
+                "title": "Le nozze di Figaro, K. 492: Atto Secondo: Voi signor, che giusto siete ... Son confusa, son stordita (Marcellina)",
+                "segments": [{ "start": 0.0, "text": "Voi signor" }] }]
+        }"#).unwrap();
+        let lib = LibrettoLibrary::from_directory(&dir).unwrap();
+        let album = Some("Solti: The Operas - Mozart");
+        let fin = Some("Le nozze di Figaro, K. 492: Act II, Scene XI. No. 16 Finale \"Voi signor che giusto siete\" (Il Conte, La Contessa, Susanna)");
+        let m = lib.match_track_with_length(album, fin, None, None, Some(226.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("solti", 2));
+        let va = Some("Le nozze di Figaro, K. 492: Act I, Scene V. Recitativo \"Va là, vecchia pedante\" (Cherubino, Susanna)");
+        let m = lib.match_track_with_length(album, va, None, None, Some(228.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("solti", 1));
+        // - Currentzis's "Se vuol ballare" (160 s; Roon's title is the file's exactly, its
+        //   album only loosely matched): Solti's 160.333 s recitative fit the length a little
+        //   better. An exact title wins; a loose album match never matches by length alone.
+        let ballare = Some("Le nozze di Figaro, K. 492: Atto Primo: Se vuol ballare signor Contino (No. 3, Cavatina: Figaro)");
+        let m = lib.match_track_with_length(Some("Mozart: Le nozze di Figaro"), ballare, None, None, Some(160.0)).unwrap();
+        assert_eq!((m.file_id.as_str(), m.track_index), ("currentzis", 1));
+        std::fs::remove_dir_all(&dir).ok();
     }
 
     #[test]
@@ -700,4 +1358,240 @@ mod tests {
 
         std::fs::remove_dir_all(&dir).ok();
     }
+
+    #[test]
+    fn test_parse_roon_title_basic() {
+        let p = parse_roon_title("Le nozze di Figaro, K. 492, Act I: No. 1, Duet. Cinque, dieci, venti \u{2013} Cosa stai misurando");
+        assert_eq!(p.act, Some("1".to_string()));
+        assert_eq!(p.number, Some(1));
+        assert_eq!(p.type_label, Some("duet".to_string()));
+        assert!(p.text_fragments.len() >= 2);
+        assert!(p.text_fragments[0].contains("cinque"));
+        assert!(p.text_fragments[1].contains("cosa stai"));
+    }
+
+    #[test]
+    fn test_parse_roon_title_recit_prefix() {
+        let p = parse_roon_title("Le nozze di Figaro, K. 492, Act I: Recit. Bravo, signor padrone \u{2013} No. 3, Se vuol ballare \u{2013} Ed aspettaste");
+        assert_eq!(p.act, Some("1".to_string()));
+        assert_eq!(p.number, Some(3));
+        assert_eq!(p.type_label, Some("recitativo".to_string()));
+        assert!(p.text_fragments.len() >= 3);
+    }
+
+    #[test]
+    fn test_parse_roon_title_finale() {
+        let p = parse_roon_title("Le nozze di Figaro, K. 492, Act II: No. 16, Finale: a-c. Esci omai garzon malnato ... Susanna, son morta");
+        assert_eq!(p.act, Some("2".to_string()));
+        assert_eq!(p.number, Some(16));
+        assert_eq!(p.type_label, Some("finale".to_string()));
+        assert!(!p.text_fragments.is_empty());
+        assert!(p.text_fragments[0].contains("esci"));
+        // Part label "a-c." should be stripped
+        assert!(!p.text_fragments[0].starts_with("a"));
+    }
+
+    #[test]
+    fn test_parse_roon_title_overture() {
+        let p = parse_roon_title("Le nozze di Figaro, K. 492: Overture");
+        assert_eq!(p.act, None);
+        assert_eq!(p.number, None);
+        assert!(p.text_fragments.iter().any(|f| f.contains("overture")));
+    }
+
+    #[test]
+    fn test_parse_ic_title_basic() {
+        let p = parse_ic_title(r#"No. 1 Duetto "Cinque...dieci...venti" (Figaro, Susanna); recitativo "Cosa stai misurando" (Susanna, Figaro)"#);
+        assert_eq!(p.number, Some(1));
+        assert_eq!(p.type_label, Some("duet".to_string()));
+        assert!(p.text_fragments.len() >= 2);
+        assert!(p.text_fragments[0].contains("cinque"));
+        assert!(p.text_fragments[1].contains("cosa stai"));
+    }
+
+    #[test]
+    fn test_parse_ic_title_finale() {
+        let p = parse_ic_title(r#"No. 15 Finale, Part 1: "Esci, ormai, garzon malnato" (Conte, Contessa, Susanna)"#);
+        assert_eq!(p.number, Some(15));
+        assert_eq!(p.type_label, Some("finale".to_string()));
+        assert_eq!(p.text_fragments.len(), 1);
+        assert!(p.text_fragments[0].contains("esci"));
+    }
+
+    #[test]
+    fn test_parse_ic_title_sinfonia() {
+        let p = parse_ic_title("Sinfonia");
+        assert_eq!(p.number, None);
+        assert!(p.text_fragments.iter().any(|f| f.contains("sinfonia")));
+    }
+
+    #[test]
+    fn test_parsed_match_overture_sinfonia() {
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492: Overture");
+        let ic = parse_ic_title("Sinfonia");
+        assert!(parsed_titles_match(&roon, &ic).is_some());
+    }
+
+    #[test]
+    fn test_parsed_match_text_fragments() {
+        // Track 2: exact 3-word match
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492, Act I: No. 1, Duet. Cinque, dieci, venti \u{2013} Cosa stai misurando");
+        let ic = parse_ic_title(r#"No. 1 Duetto "Cinque...dieci...venti" (Figaro, Susanna); recitativo "Cosa stai misurando" (Susanna, Figaro)"#);
+        let score = parsed_titles_match(&roon, &ic);
+        assert!(score.is_some());
+        assert!(score.unwrap() >= 3, "Expected score >= 3, got {:?}", score);
+    }
+
+    #[test]
+    fn test_parsed_match_number_offset() {
+        // Track 9: Roon No. 10 vs IC No. 9 — should match on text "non più andrai"
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492, Act I: No. 10, Non più andrai");
+        let ic = parse_ic_title(r#"No. 9 Aria "Non più andrai" (Figaro)"#);
+        assert!(parsed_titles_match(&roon, &ic).is_some());
+    }
+
+    #[test]
+    fn test_parsed_match_spelling_variant_omai() {
+        // Track 16: "Esci omai" vs "Esci, ormai" — 2-word pair "garzon malnato" matches
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492, Act II: No. 16, Finale: a-c. Esci omai garzon malnato ... Susanna, son morta");
+        let ic = parse_ic_title(r#"No. 15 Finale, Part 1: "Esci, ormai, garzon malnato" (Conte, Contessa, Susanna)"#);
+        let score = parsed_titles_match(&roon, &ic);
+        assert!(score.is_some(), "Expected match for omai/ormai variant, got None");
+    }
+
+    #[test]
+    fn test_parsed_match_spelling_variant_signore() {
+        // Track 17: "Signore di fuori" vs "Signori, di fuori" — 2-word pair "di fuori" matches
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492, Act II: No. 16, Finale: d-g. Signore di fuori... Ah, signor, signor");
+        let ic = parse_ic_title(r#"No. 15 Finale, Part 2: "Signori, di fuori son già" (Figaro, Conte, Contessa, Susanna, Antonio)"#);
+        let score = parsed_titles_match(&roon, &ic);
+        assert!(score.is_some(), "Expected match for Signore/Signori variant, got None");
+    }
+
+    #[test]
+    fn test_parsed_match_recit_only() {
+        // Track 13: "Recit. Che novità!" vs "Recitativo 'Che novità!'"
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492, Act II: Recit. Che novità!");
+        let ic = parse_ic_title(r#"Recitativo "Che novità!" (Conte, Contessa)"#);
+        assert!(parsed_titles_match(&roon, &ic).is_some());
+    }
+
+    #[test]
+    fn test_parsed_match_no_false_positive() {
+        // Track 16 Roon should NOT match IC track for Act III (different text)
+        let roon = parse_roon_title("Le nozze di Figaro, K. 492, Act II: No. 16, Finale: a-c. Esci omai garzon malnato ... Susanna, son morta");
+        let ic = parse_ic_title(r#"No. 16 Duetto "Crudel! perchè finora" (Conte, Susanna); recitativo "E perchè fosti meco" (Conte, Susanna, Figaro)"#);
+        // This should NOT match — completely different text
+        let score = parsed_titles_match(&roon, &ic);
+        assert!(score.is_none(), "Expected no match for different text, got {:?}", score);
+    }
+
+    /// Test all 32 Figaro track pairs from the Solti box set to ensure correct matching.
+    #[test]
+    fn test_all_32_figaro_pairs() {
+        let roon_titles = vec![
+            "Le nozze di Figaro, K. 492: Overture",
+            "Le nozze di Figaro, K. 492, Act I: No. 1, Duet. Cinque, dieci, venti \u{2013} Cosa stai misurando",
+            "Le nozze di Figaro, K. 492, Act I: No. 2, Duet. Se a caso madama \u{2013} Or bene, ascolta, e taci",
+            "Le nozze di Figaro, K. 492, Act I: Recit. Bravo, signor padrone \u{2013} No. 3, Se vuol ballare \u{2013} Ed aspettaste",
+            "Le nozze di Figaro, K. 492, Act I: No. 4, La vendetta \u{2013} Tutto ancor non ho perso",
+            "Le nozze di Figaro, K. 492, Act I: No. 5, Duet. Via resti servita \u{2013} Va' l\u{e0}, vecchia pedante",
+            "Le nozze di Figaro, K. 492, Act I: No. 6, Non so pi\u{f9} \u{2013} Ah, son perduto!",
+            "Le nozze di Figaro, K. 492, Act I: No. 7, Trio. Cosa sento! \u{2013} Basilio, in traccia tosto \u{2013} No. 8, Chorus. Giovani liete",
+            "Le nozze di Figaro, K. 492, Act I: No. 10, Non pi\u{f9} andrai",
+            "Le nozze di Figaro, K. 492, Act II: No. 11, Porgi amor \u{2013} Vieni, cara Susanna \u{2013} Quanto duolmi, Susanna",
+            "Le nozze di Figaro, K. 492, Act II: No. 12, Voi che sapete \u{2013} Bravo! che bella voce!",
+            "Le nozze di Figaro, K. 492, Act II: No. 13, Venite inginocchiatevi \u{2013} Quante buffonerie!",
+            "Le nozze di Figaro, K. 492, Act II: Recit. Che novit\u{e0}!",
+            "Le nozze di Figaro, K. 492, Act II: No. 14, Trio. Susanna or via sortite \u{2013} Dunque, voi non aprite",
+            "Le nozze di Figaro, K. 492, Act II: No. 15, Aprite presto aprite \u{2013} O guarda \u{2013} Tutto \u{e8} come io lasciai",
+            "Le nozze di Figaro, K. 492, Act II: No. 16, Finale: a-c. Esci omai garzon malnato ... Susanna, son morta",
+            "Le nozze di Figaro, K. 492, Act II: No. 16, Finale: d-g. Signore di fuori... Ah, signor, signor",
+            "Le nozze di Figaro, K. 492, Act II: No. 16, Finale: h-i. Voi signor, che giusto siete",
+            "Le nozze di Figaro, K. 492, Act III: Recit. Che imbarazzo \u{e8} mai questo \u{2013} Via, fatti core",
+            "Le nozze di Figaro, K. 492, Act III: No. 17, Duet. Crudel! perch\u{e8} finora \u{2013} Recit. E perch\u{e9} fosti meco",
+            "Le nozze di Figaro, K. 492, Act III: Recit. Hai gi\u{e0} vinta la causa! \u{2013} No. 18, Vedro mentr'io sospiro \u{2013} Recit. E decisa la lite",
+            "Le nozze di Figaro, K. 492, Act III: No. 19, Sextet. Riconosci in questo amplesso \u{2013} Recit. Eccovi, o caro amico \u{2013} Andiam, bel paggio",
+            "Le nozze di Figaro, K. 492, Act III: No. 20, E Susanna non vien! \u{2013} Dove sono i bei momenti \u{2013} Recit. Io vi dico, signor",
+            "Le nozze di Figaro, K. 492, Act III: Recit. Cosa mi narri \u{2013} No. 21, Sull' aria... Che soave zeffiretto \u{2013} Recit. Piegato \u{e8} il foglio \u{2013} No. 22, Chorus. Ricevete \u{2013} Recit. Queste sono",
+            "Le nozze di Figaro, K. 492, Act III: No. 23, Finale: a-e. Ecco la marcia, andiamo... Andate amici!",
+            "Le nozze di Figaro, K. 492, Act IV: No. 24, L'ho perduta, me meschina \u{2013} Recit. Barbarina, cos'hai?... Presto, avvertiam Susanna",
+            "Le nozze di Figaro, K. 492, Act IV: No. 25, Il capro e la capretta \u{2013} Recit. Nel padiglione a manca... Ha i diavoli nel corpo",
+            "Le nozze di Figaro, K. 492, Act IV: No. 26, In quegli anni in cui val poco",
+            "Le nozze di Figaro, K. 492, Act IV: Recit. Tutto \u{e8} disposto \u{2013} No. 27, Aprite un po' quegl' occhi",
+            "Le nozze di Figaro, K. 492, Act IV: No. 28, Giunse alfin il momento \u{2013} Deh vieni, non tardar",
+            "Le nozze di Figaro, K. 492, Act IV: No. 29, Finale: a-d. Pian pianin le andr\u{f2} pi\u{f9} presso... Pace, pace, mio dolce tesoro",
+            "Le nozze di Figaro, K. 492, Act IV: No. 29, Finale: e-g. Gente, gente, all'armi... Questo giorno di tormenti",
+        ];
+
+        let ic_titles = vec![
+            "Sinfonia",
+            r#"No. 1 Duetto "Cinque...dieci...venti" (Figaro, Susanna); recitativo "Cosa stai misurando" (Susanna, Figaro)"#,
+            r#"No. 2 Duetto "Se a caso madama" (Figaro, Susanna); recitativo "Or bene, ascolta, e taci" (Susanna, Figaro)"#,
+            r#"Recitativo "Bravo, signor padrone" (Figaro); No. 3 Cavatina "Se vuol ballare" (Figaro); recitativo "Ed aspettaste il giorno" (Bartolo, Marcellina)"#,
+            r#"No. 4 Aria "La vendetta" (Bartolo); recitativo "Tutto ancor non ho perso" (Marcellina, Susanna)"#,
+            r#"No. 5 Duetto "Via resti servita" (Marcellina, Susanna); recitativo "Va là, vecchia pedante" (Susanna)"#,
+            r#"No. 6 Aria "Non so più" (Cherubino); recitativo "Ah, son perduto" (Cherubino, Susanna, Conte)"#,
+            r#"No. 7 Terzetto "Cosa sento!" (Conte, Basilio, Susanna); recitativo "Basilio, in traccia tosto" (Conte); No. 8a Coro "Giovanni liete" (Coro, Figaro, Susanna, Conte)"#,
+            r#"No. 9 Aria "Non più andrai" (Figaro)"#,
+            r#"No. 10 Cavatina "Porgi, amor, qualche ristoro" (Contessa); recitativo "Vieni, cara Susanna" (Contessa, Susanna)"#,
+            r#"No. 11 Canzona "Voi che sapete" (Cherubino); recitativo "Bravo! che bella voce" (Contessa, Susanna, Cherubino)"#,
+            r#"No. 12 Aria "Venite, inginocchiatevi" (Susanna); recitativo "Quante buffonerie" (Contessa, Susanna)"#,
+            r#"Recitativo "Che novità!" (Conte, Contessa)"#,
+            r#"No. 13 Terzetto "Susanna or via sortite" (Conte, Contessa, Susanna); recitativo "Dunque, voi non aprite" (Conte, Contessa)"#,
+            r#"No. 14 Duettino "Aprite, presto, aprite" (Susanna, Cherubino); recitativo "O guarda il demonietto" (Susanna, Conte, Contessa)"#,
+            r#"No. 15 Finale, Part 1: "Esci, ormai, garzon malnato" (Conte, Contessa, Susanna)"#,
+            r#"No. 15 Finale, Part 2: "Signori, di fuori son già" (Figaro, Conte, Contessa, Susanna, Antonio)"#,
+            r#"No. 15 Finale, Part 3: "Voi signor, che giusto siete" (Marcellina, Basilio, Bartolo, Conte, Contessa, Susanna, Figaro)"#,
+            r#"Recitativo "Che imbarazzo è mai questo" (Conte, Contessa, Susanna)"#,
+            r#"No. 16 Duetto "Crudel! perchè finora" (Conte, Susanna); recitativo "E perchè fosti meco" (Conte, Susanna, Figaro)"#,
+            r#"No. 17 Recitativo "Hai già vinta la causa?" ed Aria "Vedrò, mentr'io sospiro" (Conte); recitativo "È decisa la lite" (Marcellina, Curzio, Conte, Bartolo, Figaro)"#,
+            r#"No. 18 Sestetto "Riconosci in questo amplesso" (Marcellina, Figaro, Bartolo, Curzio, Conte, Susanna); recitativo "Eccovi, o caro amico" (Marcellina, Bartolo, Susanna, Figaro)"#,
+            r#"No. 19 Recitativo "E Susanna non vien" ed Aria "Dove sono i bei momenti" (Contessa); recitativo "Io vi dico, signor" (Antonio, Conte)"#,
+            r#"Recitativo "Cosa mi narri" (Contessa, Susanna); No. 20 Duetto "Sull'aria ... che soave zeffiretto" (Contessa, Susanna); recitativo "Piegato è il foglio" (Susanna); No. 21 Coro "Ricevete, o padroncina" (Coro); recitativo "Queste sono, Madama" (Barbarina, Contessa, Susanna, Antonio, Conte)"#,
+            r#"No. 22 Finale: "Ecco la marcia" (Figaro, Susanna, Conte, Contessa, Chorus)"#,
+            r#"No. 23 Cavatina " L'ho perduta, me meschina" (Barbarina); recitativo "Barbarina, cos'hai" (Figaro, Barbarina, Marcellina)"#,
+            r#"No. 24 Aria "Il capro e la capretta" (Marcellina); recitativo "Nel padiglione a manca" (Barbarina, Figaro, Basilio, Bartolo)"#,
+            r#"No. 25 Aria "In quegli anni in cui val poco" (Basilio)"#,
+            r#"No. 26 Recitativo "Tutto è disposto" ed Aria "O Aprite un po' quegli occhi" (Figaro); recitativo "Signora, ella mi disse" (Susanna, Marcellina, Contessa, Figaro)"#,
+            r#"No. 27 Recitativo "Giunse alfin il momento" ed Aria "Deh vieni, non tardar" (Susanna); recitativo "Perfida! E in quella forma" (Figaro, Cherubino, Contessa)"#,
+            r#"No. 28 Finale, Part 1: "Pian pianin le andrò più presso" (Cherubino, Contessa, Conte, Susanna, Figaro)"#,
+            r#"No. 28 Finale, Part 2: " Gente! gente! all'armi! all'armi!" (Conte, tutti)"#,
+        ];
+
+        assert_eq!(roon_titles.len(), 32);
+        assert_eq!(ic_titles.len(), 32);
+
+        let mut failures = Vec::new();
+        for (i, (roon_raw, ic_raw)) in roon_titles.iter().zip(ic_titles.iter()).enumerate() {
+            let roon = parse_roon_title(roon_raw);
+            let ic = parse_ic_title(ic_raw);
+            let score = parsed_titles_match(&roon, &ic);
+
+            if score.is_none() {
+                failures.push(format!("Track {}: no match\n  Roon: {}\n  IC:   {}\n  Roon frags: {:?}\n  IC frags:   {:?}",
+                    i + 1, roon_raw, ic_raw, roon.text_fragments, ic.text_fragments));
+            }
+
+            // Also verify it picks the RIGHT track (not a different one) by checking
+            // that no other IC track scores higher
+            if let Some(correct_score) = score {
+                for (j, other_ic_raw) in ic_titles.iter().enumerate() {
+                    if j == i { continue; }
+                    let other_ic = parse_ic_title(other_ic_raw);
+                    if let Some(other_score) = parsed_titles_match(&roon, &other_ic) {
+                        if other_score > correct_score {
+                            failures.push(format!("Track {}: wrong target! Correct score={} but track {} scores {}",
+                                i + 1, correct_score, j + 1, other_score));
+                        }
+                    }
+                }
+            }
+        }
+
+        if !failures.is_empty() {
+            panic!("Figaro matching failures:\n{}", failures.join("\n\n"));
+        }
+    }
 }
+
