@@ -58,10 +58,16 @@
     function create(root, config = {}) {
         const scroller = config.scroller || window;
         const onUpdate = config.onUpdate || (() => {});
+        const MSG = Object.assign({
+            waiting: 'Waiting for playback...',
+            noMatch: 'No libretto match for this track',
+            noSegments: 'No libretto segments for this track',
+        }, config.messages || {});
         const P = `lv${++viewCount}-`;  // element id prefix
         const byId = id => document.getElementById(P + id);
+        const empty = text => `<div class="lv-empty">${escapeHtml(text)}</div>`;
         root.classList.add('lv');
-        root.innerHTML = '<div class="lv-empty">Waiting for playback...</div>';
+        root.innerHTML = empty(MSG.waiting);
 
         // ---- State ----
         let currentContent = null;   // LibrettoContent from server (segments, metadata)
@@ -310,8 +316,13 @@
             if (el) el.querySelector('.ens-card-body').innerHTML = body.html;
         }
 
+        // New text (another track, other display options) jumps straight to the current
+        // line, even while auto-scroll is paused; after that the list scrolls smoothly.
+        let jumpNext = true;
         function scrollTo(el, block) {
-            if (autoScroll && el) el.scrollIntoView({ behavior: 'smooth', block });
+            if (!el || !(autoScroll || jumpNext)) return;
+            el.scrollIntoView({ behavior: jumpNext ? 'auto' : 'smooth', block });
+            jumpNext = false;
         }
 
         // Sung-text tracks: activate the list item (line or card) due at this position.
@@ -389,7 +400,7 @@
 
         function renderSegments(segments) {
             if (!segments || segments.length === 0) {
-                root.innerHTML = '<div class="lv-empty">No libretto segments for this track</div>';
+                root.innerHTML = empty(MSG.noSegments);
                 segmentGroupMap = [];
                 flow = [];
                 return;
@@ -497,10 +508,11 @@
         function setContent(content) {
             currentContent = content || null;
             currentSegmentIndex = -1;
+            jumpNext = true;
             if (!currentContent) {
                 prepareEnsemble(null);
                 flow = [];
-                root.innerHTML = '<div class="lv-empty">No libretto match for this track</div>';
+                root.innerHTML = empty(MSG.noMatch);
                 onUpdate(state());
                 return;
             }
@@ -536,10 +548,19 @@
             reportedAt = performance.now();
         }
 
+        // Jump back to the current line (after the host changes the text's size).
+        function recenter() {
+            jumpNext = true;
+            flowActive = -2;
+            currentSegmentIndex = -1;
+            if (currentContent) updateHighlight(seekPosition);
+        }
+
         function setOption(name, val) {
             if (!(name in OPTS)) return;
             OPTS[name] = val;
             saveOpts();
+            jumpNext = true;
             if (currentContent) {
                 renderSegments(currentContent.segments);
                 currentSegmentIndex = -1;
@@ -547,25 +568,34 @@
             }
         }
 
-        // Manual scrolling pauses auto-scroll; it resumes after 5 s without scrolling.
+        // Scrolling by hand (touch, wheel, scrollbar, keys) pauses auto-scroll; it resumes
+        // 5 s after the last such input. Scroll events themselves aren't used: the view's
+        // own smooth scrolling fires them too, and would pause it after every move.
         let scrollTimer = null;
-        const onScroll = () => {
+        const onUserScroll = () => {
             autoScroll = false;
             clearTimeout(scrollTimer);
             scrollTimer = setTimeout(() => { autoScroll = true; }, 5000);
         };
-        (scroller === window ? document : scroller).addEventListener('scroll', onScroll, { passive: true });
+        const onKey = e => {
+            if (['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown', 'Home', 'End', ' '].includes(e.key)) onUserScroll();
+        };
+        const target = scroller === window ? document : scroller;
+        const INPUTS = ['wheel', 'touchmove', 'pointerdown'];
+        INPUTS.forEach(t => target.addEventListener(t, onUserScroll, { passive: true }));
+        window.addEventListener('keydown', onKey);
 
         function destroy() {
             clearInterval(ticker);
             clearTimeout(scrollTimer);
-            (scroller === window ? document : scroller).removeEventListener('scroll', onScroll);
+            INPUTS.forEach(t => target.removeEventListener(t, onUserScroll));
+            window.removeEventListener('keydown', onKey);
             root.innerHTML = '';
             root.classList.remove('lv');
         }
 
         return {
-            setContent, setZone, resetPosition, setOption, state, destroy,
+            setContent, setZone, resetPosition, setOption, state, destroy, recenter,
             reportPosition: onReportedPosition,
             get options() { return { ...OPTS }; },
         };

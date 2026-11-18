@@ -128,6 +128,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Roon Remote Display</title>
+    <link rel="stylesheet" href="/libretto.css">
+    <link rel="stylesheet" href="/libretto-mode.css">
     <style>
         * {
             margin: 0;
@@ -724,6 +726,8 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         <p>Once authorized, the connection will be established automatically.</p>
     </div>
 
+    <script src="/libretto.js"></script>
+    <script src="/libretto-mode.js"></script>
     <script>
         let selectedZone = 'all';
         let availableZones = [];  // All zones from /zones
@@ -1503,6 +1507,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     element.remove();
                 }
             });
+
+            // Libretto buttons on the cards whose track has a libretto
+            LibrettoMode.decorate();
         }
 
         function updateAuthOverlay(roonConnected) {
@@ -1576,6 +1583,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const data = await response.json();
                 nowPlayingZones = data.now_playing;
                 renderZones();
+                LibrettoMode.onZones(nowPlayingZones);
             } catch (e) {
                 console.error('Error fetching now playing:', e);
             }
@@ -2022,6 +2030,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                         if (msg.now_playing) {
                             nowPlayingZones = msg.now_playing;
                             renderZones();
+                            LibrettoMode.onZones(nowPlayingZones);
                         }
                         // Still update zones list (for zone selector)
                         updateZones();
@@ -2036,6 +2045,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     } else if (msg.type === 'seek_updated') {
                         // Only update seek position for this specific zone
                         updateSeekPosition(msg.zone_id, msg.seek_position, msg.queue_time_remaining);
+                        LibrettoMode.onSeek(msg);
+                    } else if (msg.type === 'libretto_update') {
+                        // This zone's track has (or no longer has) a libretto
+                        LibrettoMode.onLibrettoUpdate(msg);
                     } else if (msg.type === 'queue_changed') {
                         // Queue has changed - update queue info display and refresh popup if open
                         updateQueueInfo(msg.zone_id, msg.queue_items_remaining, msg.queue_time_remaining);
@@ -2083,6 +2096,39 @@ async fn ws_handler(
 }
 
 /// Handle individual WebSocket connection
+/// Send a LibrettoUpdate for each zone whose libretto match has changed since the last one
+/// sent on this socket. `last_match` holds each zone's match key ("file_id:track_index" or
+/// "none").
+async fn send_libretto_updates(
+    socket: &mut WebSocket,
+    state: &AppState,
+    now_playing: &[crate::roon::WsZoneData],
+    last_match: &mut std::collections::HashMap<String, String>,
+) -> Result<(), axum::Error> {
+    let Some(ref lib) = state.library else { return Ok(()) };
+    for zone in now_playing {
+        let content = lib.match_and_extract(
+            zone.album.as_deref(),
+            zone.track.as_deref(),
+            None, // disc_number not in WsZoneData yet
+            None, // track_number not in WsZoneData yet
+            zone.length_seconds.map(f64::from), // tells recordings apart
+        );
+        let match_key = match &content {
+            Some(c) => format!("{}:{}", c.file_id, c.track_index),
+            None => "none".to_string(),
+        };
+        if last_match.get(&zone.zone_id) != Some(&match_key) {
+            last_match.insert(zone.zone_id.clone(), match_key);
+            let update = crate::roon::WsMessage::LibrettoUpdate { zone_id: zone.zone_id.clone(), content };
+            if let Ok(json) = serde_json::to_string(&update) {
+                socket.send(axum::extract::ws::Message::Text(json)).await?;
+            }
+        }
+    }
+    Ok(())
+}
+
 async fn handle_socket(mut socket: WebSocket, state: AppState) {
     let client = state.roon_client.lock().await;
     let mut rx = client.subscribe_ws();
@@ -2102,6 +2148,22 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
     // Used to deduplicate — only send LibrettoUpdate when the match actually changes
     let mut last_match: std::collections::HashMap<String, String> = std::collections::HashMap::new();
 
+    // A page that has just connected gets the current zones and their libretto matches
+    // at once, rather than at the next zone change (so it can reopen in libretto mode).
+    let (now_playing, _, _) = {
+        let client = state.roon_client.lock().await;
+        client.build_ws_zone_data().await
+    };
+    if send_libretto_updates(&mut socket, &state, &now_playing, &mut last_match).await.is_err() {
+        return;
+    }
+    let zones_msg = crate::roon::WsMessage::ZonesChanged { now_playing, raw_zones: Vec::new(), raw_json: None };
+    if let Ok(json) = serde_json::to_string(&zones_msg) {
+        if socket.send(axum::extract::ws::Message::Text(json)).await.is_err() {
+            return;
+        }
+    }
+
     // Handle incoming and outgoing messages
     loop {
         tokio::select! {
@@ -2109,39 +2171,10 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
             result = rx.recv() => {
                 match result {
                     Ok(msg) => {
-                        // Check for libretto updates on ZonesChanged
+                        // Libretto matches for the zones, sent when they change
                         if let crate::roon::WsMessage::ZonesChanged { ref now_playing, .. } = msg {
-                            if let Some(ref lib) = state.library {
-                                for zone in now_playing {
-                                    let content = lib.match_and_extract(
-                                        zone.album.as_deref(),
-                                        zone.track.as_deref(),
-                                        None, // disc_number not in WsZoneData yet
-                                        None, // track_number not in WsZoneData yet
-                                        zone.length_seconds.map(f64::from), // tells recordings apart
-                                    );
-
-                                    // Build a dedup key: "file_id:track_index" or "none"
-                                    let match_key = match &content {
-                                        Some(c) => format!("{}:{}", c.file_id, c.track_index),
-                                        None => "none".to_string(),
-                                    };
-
-                                    let prev = last_match.get(&zone.zone_id);
-                                    if prev.map(|p| p.as_str()) != Some(&match_key) {
-                                        last_match.insert(zone.zone_id.clone(), match_key);
-
-                                        let update = crate::roon::WsMessage::LibrettoUpdate {
-                                            zone_id: zone.zone_id.clone(),
-                                            content,
-                                        };
-                                        if let Ok(json) = serde_json::to_string(&update) {
-                                            if socket.send(axum::extract::ws::Message::Text(json)).await.is_err() {
-                                                break;
-                                            }
-                                        }
-                                    }
-                                }
+                            if send_libretto_updates(&mut socket, &state, now_playing, &mut last_match).await.is_err() {
+                                break;
                             }
                         }
 
@@ -2176,6 +2209,9 @@ async fn handle_socket(mut socket: WebSocket, state: AppState) {
 const LIBRETTO_VIEW_HTML: &str = include_str!("web/libretto-view.html");
 const LIBRETTO_JS: &str = include_str!("web/libretto.js");
 const LIBRETTO_CSS: &str = include_str!("web/libretto.css");
+/// Libretto mode on the main page: a zone's sung text beside or instead of its controls.
+const LIBRETTO_MODE_JS: &str = include_str!("web/libretto-mode.js");
+const LIBRETTO_MODE_CSS: &str = include_str!("web/libretto-mode.css");
 
 // Route documentation - keep this in sync with the actual routes
 const ROUTES: &[(&str, &str, &str)] = &[
@@ -2271,6 +2307,8 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, config: crate::config:
         .route("/libretto-view", get(libretto_view_handler))
         .route("/libretto.js", get(libretto_js_handler))
         .route("/libretto.css", get(libretto_css_handler))
+        .route("/libretto-mode.js", get(libretto_mode_js_handler))
+        .route("/libretto-mode.css", get(libretto_mode_css_handler))
         .layer(CorsLayer::permissive())
         .layer(TimeoutLayer::new(Duration::from_secs(30)))
         .with_state(state);
@@ -2367,17 +2405,16 @@ async fn libretto_view_handler(State(state): State<AppState>) -> Response {
     Html(LIBRETTO_VIEW_HTML.to_string()).into_response()
 }
 
-/// The shared libretto view's script and styles. no-cache: after a rebuild the browser
-/// revalidates instead of running an old copy.
-async fn libretto_js_handler() -> Response {
-    ([(header::CONTENT_TYPE, "text/javascript; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
-     LIBRETTO_JS).into_response()
+/// The web assets the pages load: the shared libretto view and the main page's libretto
+/// mode. no-cache: after a rebuild the browser revalidates instead of running an old copy.
+fn web_asset(content_type: &'static str, body: &'static str) -> Response {
+    ([(header::CONTENT_TYPE, content_type), (header::CACHE_CONTROL, "no-cache")], body).into_response()
 }
 
-async fn libretto_css_handler() -> Response {
-    ([(header::CONTENT_TYPE, "text/css; charset=utf-8"), (header::CACHE_CONTROL, "no-cache")],
-     LIBRETTO_CSS).into_response()
-}
+async fn libretto_js_handler() -> Response { web_asset("text/javascript; charset=utf-8", LIBRETTO_JS) }
+async fn libretto_css_handler() -> Response { web_asset("text/css; charset=utf-8", LIBRETTO_CSS) }
+async fn libretto_mode_js_handler() -> Response { web_asset("text/javascript; charset=utf-8", LIBRETTO_MODE_JS) }
+async fn libretto_mode_css_handler() -> Response { web_asset("text/css; charset=utf-8", LIBRETTO_MODE_CSS) }
 
 async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
     let client = state.roon_client.lock().await;
@@ -2578,7 +2615,9 @@ async fn control_handler(
 ) -> Response {
     let client = state.roon_client.lock().await;
 
-    match client.control_zone(&zone_id, &payload.control).await {
+    let result = client.control_zone(&zone_id, &payload.control).await;
+    log::info!("control {} for zone {}: {:?}", payload.control, zone_id, result);
+    match result {
         Ok(_) => (StatusCode::OK, "Control command sent").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
@@ -2632,7 +2671,9 @@ async fn mute_handler(
 ) -> Response {
     let client = state.roon_client.lock().await;
 
-    match client.mute_output(&zone_id, payload.mute).await {
+    let result = client.mute_output(&zone_id, payload.mute).await;
+    log::info!("mute {} for zone {}: {:?}", payload.mute, zone_id, result);
+    match result {
         Ok(_) => (StatusCode::OK, "Mute command sent").into_response(),
         Err(e) => (StatusCode::INTERNAL_SERVER_ERROR, e).into_response(),
     }
