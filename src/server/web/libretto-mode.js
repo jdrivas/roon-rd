@@ -357,6 +357,7 @@
         lm.el.querySelector('.lm-settings').innerHTML = `
             <div class="lm-row"><span class="lm-lbl">Translation</span><span class="lm-seg">${seg('translation', [['aligned', 'Aligned'], ['line', 'Line'], ['off', 'Off']])}</span></div>
             <div class="lm-row"><span class="lm-lbl">Ensemble</span><span class="lm-seg">${seg('ensemble', [['stanza', 'Stanza'], ['rows', 'Rows']])}</span></div>
+            <div class="lm-row"><span class="lm-lbl">Bars</span><span class="lm-seg">${seg('bars', [['on', 'On'], ['off', 'Off']])}</span></div>
             <div class="lm-row"><span class="lm-lbl">Text size</span><span class="lm-seg">
                 <button data-size="-1" ${scaleIdx === 0 ? 'disabled' : ''}>A−</button>
                 <span class="lm-size">${Math.round(SCALES[scaleIdx] * 100)}%</span>

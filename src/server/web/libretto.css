@@ -159,6 +159,24 @@
     font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
 }
 .lv .ens-row.still { opacity: 1; }
+/* Piece and bars (the Bars option): under the time and singer, level with the
+   translation, and in a card's title. The label never widens the block (width 0,
+   min-width 100%): a long one wraps instead of pushing the text over. */
+.lv .lv-lead { display: flex; flex-direction: column; flex-shrink: 0; }
+.lv .lv-lead-top { display: flex; gap: 12px; align-items: baseline; }
+.lv .lv-lead .lv-where { width: 0; min-width: 100%; margin-top: 3px; line-height: 1.3; }
+/* With Bars on, the time is left-aligned too, so it and the label share a left edge. */
+.lv.lv-bars .segment .seg-start { text-align: left; }
+.lv .lv-where {
+    font-family: 'SF Mono', 'Menlo', 'Consolas', monospace;
+    font-size: 11px;
+    font-weight: 400;
+    letter-spacing: 0;
+    text-transform: none;
+    color: #777;
+}
+.lv .segment.active .lv-where { color: #c9a84c; }
+.lv .ens-card.active .ens-span.lv-where { color: #c9a84c; }
 @media (max-width: 600px) {
     .lv { padding: 8px 12px 40vh; }
     .lv .ens-row { flex-direction: column; gap: 0; }
@@ -170,4 +188,5 @@
     .lv .segment .character { text-align: left; min-width: auto; }
     .lv .segment .seg-start { text-align: left; min-width: auto; }
     .lv .ensemble-group { margin-left: 0; }
+    .lv .lv-lead-top .character, .lv .lv-lead-top .seg-start { min-width: auto; }
 }

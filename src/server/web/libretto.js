@@ -11,7 +11,7 @@
 //   view.setZone(zone);          // a now_playing zone: state, position, length
 //   view.reportPosition(secs);   // a seek_updated position for that zone
 //   view.resetPosition(secs);    // switching zones: restart position tracking
-//   view.setOption(name, val);   // 'translation' | 'ensemble'; remembered in this browser
+//   view.setOption(name, val);   // 'translation' | 'ensemble' | 'bars'; remembered in this browser
 //   view.options; view.state();
 //
 // Several views can live on one page: element ids are prefixed per view.
@@ -55,6 +55,37 @@
         return `${Math.floor(s / 60)}:${(s % 60).toString().padStart(2, '0')}`;
     }
 
+    // ---- Where a line is in the score ----
+    // Sung-text files carry the piece id ("no16", "no18-aria", "rec05a", "app-no15") and
+    // bar_start/bar_end as printed bar + fraction (20.39 = 39% into bar 20).
+    function pieceLabel(id) {
+        if (!id) return '';
+        let m = id.match(/^no(\d+)(?:-(recit|aria))?$/);
+        if (m) return `No. ${+m[1]}` + (m[2] === 'recit' ? ' recit.' : m[2] === 'aria' ? ' aria' : '');
+        // A recitative after No. N: "Recit. 20b" (the second after No. 20), short enough
+        // for the narrow column under the time and singer.
+        m = id.match(/^rec(\d+)([a-z])$/);
+        if (m) return `Recit. ${+m[1]}${m[2]}`;
+        m = id.match(/^app-no(\d+)([a-z]?)$/);
+        if (m) return `Appendix No. ${+m[1]}${m[2]}`;
+        return id;
+    }
+
+    function barsLabel(b0, b1) {
+        if (b0 == null) return '';
+        const a = Math.floor(b0), b = Math.max(a, Math.floor(b1 ?? b0));
+        return a === b ? `bar ${a}` : `bars ${a}–${b}`;
+    }
+
+    // "No. 16 · bars 245–247" for a list of lines (one line, or an ensemble card's lines).
+    function whereLabel(lines) {
+        const piece = lines.map(s => s.piece).find(Boolean);
+        const bars = lines.filter(s => s.bar_start != null);
+        const b0 = bars.length ? Math.min(...bars.map(s => s.bar_start)) : null;
+        const b1 = bars.length ? Math.max(...bars.map(s => s.bar_end ?? s.bar_start)) : null;
+        return [pieceLabel(piece), barsLabel(b0, b1)].filter(Boolean).join(' · ');
+    }
+
     function create(root, config = {}) {
         const scroller = config.scroller || window;
         const onUpdate = config.onUpdate || (() => {});
@@ -90,7 +121,8 @@
         // translation: 'aligned' (each Italian phrase over its literal English), 'line', 'off'
         // ensemble:    'stanza' (each character's text once, the highlight moves within it)
         //              or 'rows' (each character's most recent lines)
-        const OPTS = { translation: 'aligned', ensemble: 'stanza' };
+        // bars:        'on' shows each line's piece and bars under the singer's name, 'off'
+        const OPTS = { translation: 'aligned', ensemble: 'stanza', bars: 'off' };
         try { Object.assign(OPTS, JSON.parse(localStorage.getItem(OPTS_KEY) || '{}')); } catch (e) {}
         function saveOpts() { try { localStorage.setItem(OPTS_KEY, JSON.stringify(OPTS)); } catch (e) {} }
 
@@ -392,6 +424,11 @@
         function renderSegmentInner(seg, isGroupCont) {
             let html = `<div class="${isGroupCont ? 'seg-start group-cont' : 'seg-start'}">${formatTime(seg.start)}</div>`;
             html += `<div class="character">${escapeHtml(seg.character || '')}</div>`;
+            // With Bars on, the time and singer sit in a block with the piece and bars
+            // under them, level with the second line of text (the translation).
+            const where = OPTS.bars === 'on' ? whereLabel([seg]) : '';
+            if (where) html = `<div class="lv-lead"><div class="lv-lead-top">${html}</div>` +
+                              `<div class="lv-where">${escapeHtml(where)}</div></div>`;
             html += `<div class="texts">`;
             html += seg.direction ? `<div class="direction-text">${escapeHtml(seg.direction)}</div>` : renderSung(seg);
             html += `</div>`;
@@ -399,6 +436,7 @@
         }
 
         function renderSegments(segments) {
+            root.classList.toggle('lv-bars', OPTS.bars === 'on');
             if (!segments || segments.length === 0) {
                 root.innerHTML = empty(MSG.noSegments);
                 segmentGroupMap = [];
@@ -431,8 +469,10 @@
                     const f = { kind: 'card', pi, id: `card-${pi}`, start: p.start, key: '' };
                     const body = renderCardBody(p, p.t0 - 0.001, false);
                     f.key = body.key;
+                    const where = OPTS.bars === 'on' ? whereLabel(p.rows.flatMap(r => r.lines)) : '';
                     html += `<div class="ens-card future" id="${P}${f.id}"><div class="ens-title">Ensemble` +
-                            `<span class="ens-span">${formatTime(p.t0 - LEAD_SECONDS)} – ${formatTime(p.t1 - LEAD_SECONDS)}</span></div>` +
+                            `<span class="ens-span">${formatTime(p.t0 - LEAD_SECONDS)} – ${formatTime(p.t1 - LEAD_SECONDS)}</span>` +
+                            (where ? `<span class="ens-span lv-where">${escapeHtml(where)}</span>` : '') + `</div>` +
                             `<div class="ens-card-body">${body.html}</div></div>`;
                     flow.push(f);
                 }
