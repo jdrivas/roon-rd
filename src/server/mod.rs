@@ -112,6 +112,9 @@ pub struct ZonesResponse {
 pub struct NowPlayingResponse {
     pub now_playing: Vec<crate::roon::WsZoneData>,
     pub count: usize,
+    /// False until Roon has sent the zone list for this connection: an empty list then
+    /// means "still loading", not "no zones"
+    pub zones_loaded: bool,
 }
 
 #[derive(Serialize, Deserialize)]
@@ -739,6 +742,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         let selectedZone = 'all';
         let availableZones = [];  // All zones from /zones
         let nowPlayingZones = [];  // Playing/paused zones from /now-playing
+        let zonesLoaded = false;  // Has Roon sent its zone list since (re)connecting?
         let timeDisplayMode = {};  // Track time display mode per zone: true = show remaining, false = show total
         let artistImageCarousels = {};  // Track carousel timers per zone
         let artistImagesVisible = {};  // Track artist image visibility per zone: true = visible (default), false = hidden
@@ -1444,7 +1448,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             });
 
             if (zonesToShow.length === 0) {
-                container.innerHTML = '<div class="no-playing">No zones found</div>';
+                // Until Roon has sent its zone list (just after connecting or reconnecting),
+                // an empty list means "still loading", not "no zones".
+                const text = zonesLoaded ? 'No zones found' : 'Searching for Roon zones…';
+                container.innerHTML = `<div class="no-playing">${text}</div>`;
                 return;
             }
 
@@ -1618,6 +1625,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const response = await fetch('/now-playing');
                 const data = await response.json();
                 nowPlayingZones = data.now_playing;
+                zonesLoaded = data.zones_loaded !== false;
                 renderZones();
                 LibrettoMode.onZones(nowPlayingZones);
             } catch (e) {
@@ -2064,6 +2072,7 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                     if (msg.type === 'zones_changed') {
                         // Zone change message now includes full zone data
                         if (msg.now_playing) {
+                            zonesLoaded = true;  // Roon has sent its zone list
                             nowPlayingZones = msg.now_playing;
                             renderZones();
                             LibrettoMode.onZones(nowPlayingZones);
@@ -2077,6 +2086,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                             // When reconnected, refresh all data
                             updateZones();
                             updateNowPlaying();
+                        } else {
+                            // Zones come back with the connection; until then, "searching"
+                            zonesLoaded = false;
                         }
                     } else if (msg.type === 'seek_updated') {
                         // Only update seek position for this specific zone
@@ -2582,9 +2594,10 @@ async fn now_playing_handler(State(state): State<AppState>) -> Json<NowPlayingRe
     log::debug!("now_playing_handler called");
 
     // Use the RoonClient's build_ws_zone_data method which has all the debug logging
-    let (now_playing, _raw_zones, _raw_json) = {
+    let (now_playing, _raw_zones, _raw_json, zones_loaded) = {
         let client = state.roon_client.lock().await;
-        client.build_ws_zone_data().await
+        let (now_playing, raw_zones, raw_json) = client.build_ws_zone_data().await;
+        (now_playing, raw_zones, raw_json, client.zones_loaded().await)
     }; // Lock is released here
 
     log::debug!("now_playing_handler returning {} zones", now_playing.len());
@@ -2594,6 +2607,7 @@ async fn now_playing_handler(State(state): State<AppState>) -> Json<NowPlayingRe
     Json(NowPlayingResponse {
         now_playing,
         count,
+        zones_loaded,
     })
 }
 

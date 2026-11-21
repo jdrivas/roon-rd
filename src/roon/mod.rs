@@ -107,6 +107,8 @@ struct Shared {
     core_name: Arc<RwLock<Option<String>>>,
     /// The Core found by discovery, before and after it registers
     discovered_core: Arc<RwLock<Option<String>>>,
+    /// Whether Roon has sent the zone list since this connection registered
+    zones_loaded: Arc<RwLock<bool>>,
     images: Arc<RwLock<HashMap<String, ImageData>>>,
     image_service: Arc<RwLock<Option<Image>>>,
     transport_service: Arc<RwLock<Option<Transport>>>,
@@ -138,6 +140,8 @@ pub struct RoonClient {
     core_name: Arc<RwLock<Option<String>>>,
     /// The Core found by discovery, before and after it registers
     discovered_core: Arc<RwLock<Option<String>>>,
+    /// Whether Roon has sent the zone list since this connection registered
+    zones_loaded: Arc<RwLock<bool>>,
     images: Arc<RwLock<HashMap<String, ImageData>>>,
     image_service: Arc<RwLock<Option<Image>>>,
     transport_service: Arc<RwLock<Option<Transport>>>,
@@ -397,6 +401,7 @@ impl RoonClient {
             connected: Arc::new(RwLock::new(false)),
             core_name: Arc::new(RwLock::new(None)),
             discovered_core: Arc::new(RwLock::new(None)),
+            zones_loaded: Arc::new(RwLock::new(false)),
             images: Arc::new(RwLock::new(HashMap::new())),
             image_service: Arc::new(RwLock::new(None)),
             transport_service: Arc::new(RwLock::new(None)),
@@ -447,6 +452,7 @@ impl RoonClient {
             connected: self.connected.clone(),
             core_name: self.core_name.clone(),
             discovered_core: self.discovered_core.clone(),
+            zones_loaded: self.zones_loaded.clone(),
             images: self.images.clone(),
             image_service: self.image_service.clone(),
             transport_service: self.transport_service.clone(),
@@ -600,6 +606,7 @@ impl RoonClient {
         let was_connected = std::mem::replace(&mut *s.connected.write().await, false);
         *s.core_name.write().await = None;
         *s.discovered_core.write().await = None;
+        *s.zones_loaded.write().await = false;
         s.zones.write().await.clear();
         *s.image_service.write().await = None;
         *s.transport_service.write().await = None;
@@ -615,6 +622,7 @@ impl RoonClient {
     async fn handle_core_event(s: &Shared, core_event: CoreEvent, msg: Option<(serde_json::Value, Parsed)>) {
         let Shared {
             zones, zones_raw_json, queues, active_queue_zone, queue_ready, connected, core_name, discovered_core,
+            zones_loaded,
             images, image_service, transport_service, browse_service, ws_tx, pending_stops,
         } = s.clone();
         match core_event {
@@ -674,6 +682,7 @@ impl RoonClient {
                     }
                 }
                 Parsed::Zones(zones_changed) => {
+                    *zones_loaded.write().await = true;
                     log::debug!("Roon API Zones response:\n{:#?}", zones_changed);
                     log::debug!("Zones changed, updating zone map");
 
@@ -1047,6 +1056,12 @@ impl RoonClient {
     /// Get the name of the connected Roon Core
     pub async fn get_core_name(&self) -> Option<String> {
         self.core_name.read().await.clone()
+    }
+
+    /// Whether Roon has sent the zone list since the connection registered. Until then an
+    /// empty zone list means "still loading", not "no zones".
+    pub async fn zones_loaded(&self) -> bool {
+        *self.zones_loaded.read().await
     }
 
     /// The connection state, for the web UI: Connected, or a Core found but not yet
