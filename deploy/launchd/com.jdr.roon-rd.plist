@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<!--
+  roon-rd as a per-user LaunchAgent on the home server (Mac Studio).
+  Install: see README.md beside this file.
+-->
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.jdr.roon-rd</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>/Users/jdr/srv/bin/roon-rd-macos-arm64</string>
+        <string>server</string>
+        <string>--port</string>
+        <string>3000</string>
+    </array>
+
+    <!-- Same directory as the tmux setup: config.toml and Roon pairing state are found here. -->
+    <key>WorkingDirectory</key>
+    <string>/Users/jdr/srv</string>
+
+    <!-- Start at login (and when bootstrapped); restart if it exits. -->
+    <key>RunAtLoad</key>
+    <true/>
+    <key>KeepAlive</key>
+    <true/>
+    <!-- Wait at least this many seconds between restarts, so a crash loop doesn't spin. -->
+    <key>ThrottleInterval</key>
+    <integer>10</integer>
+
+    <!-- stdout and stderr appended to one file, as `2>&1 | tee` did (tee truncated on each start). -->
+    <key>StandardOutPath</key>
+    <string>/Users/jdr/srv/roon-rd.log</string>
+    <key>StandardErrorPath</key>
+    <string>/Users/jdr/srv/roon-rd.log</string>
+</dict>
+</plist>
