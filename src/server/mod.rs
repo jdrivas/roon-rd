@@ -84,6 +84,9 @@ pub struct AppState {
 #[derive(Serialize, Deserialize)]
 pub struct StatusResponse {
     pub connected: bool,
+    /// "connected", "authorizing" (Core found, extension not yet authorized) or
+    /// "searching" (no Core found: starting up, or reconnecting after a loss)
+    pub state: crate::roon::ConnectionState,
     pub core_name: Option<String>,
     pub message: String,
 }
@@ -176,6 +179,10 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
         }
         .status.disconnected {
             color: #e74c3c;
+            background: none;
+        }
+        .status.authorizing {
+            color: #f0ad4e;
             background: none;
         }
         .reconnect-btn {
@@ -721,10 +728,9 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
     </div>
 
     <div id="auth-overlay" class="auth-overlay">
-        <h2>Roon Core Not Connected</h2>
-        <p>Please authorize this extension in:</p>
-        <p><strong>Roon Settings &gt; Extensions &gt; Roon Remote Display</strong></p>
-        <p>Once authorized, the connection will be established automatically.</p>
+        <!-- Filled in by updateAuthOverlay(): searching (reconnecting) or authorizing -->
+        <h2 id="auth-overlay-title">Roon Server Not Connected</h2>
+        <div id="auth-overlay-body"></div>
     </div>
 
     <script src="/libretto.js"></script>
@@ -1513,11 +1519,33 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
             LibrettoMode.decorate();
         }
 
-        function updateAuthOverlay(roonConnected) {
+        // The Roon Server last connected to, so a lost connection can name it.
+        let lastCoreName = null;
+
+        // state: 'connected', 'authorizing' (Core found, extension not yet authorized) or
+        // 'searching' (no Core found: starting up, or reconnecting after a loss).
+        function updateAuthOverlay(roonConnected, state = 'searching', coreName = null) {
             const zonesContainer = document.getElementById('zones-container');
             const authOverlay = document.getElementById('auth-overlay');
 
             if (!roonConnected) {
+                const title = document.getElementById('auth-overlay-title');
+                const body = document.getElementById('auth-overlay-body');
+                const name = LibrettoView.escapeHtml(coreName || lastCoreName || '');
+                if (state === 'authorizing') {
+                    title.textContent = 'Authorize Roon Remote Display';
+                    body.innerHTML =
+                        `<p>Found the Roon Server${name ? ` <strong>${name}</strong>` : ''}, but this extension isn't authorized yet. Enable it in:</p>` +
+                        `<p><strong>Roon Settings &gt; Extensions &gt; Roon Remote Display</strong></p>` +
+                        `<p>Once authorized, the connection will be established automatically.</p>`;
+                } else {
+                    title.textContent = 'Reconnecting to Roon Server';
+                    body.innerHTML = name
+                        ? `<p>Lost the connection to <strong>${name}</strong>.</p>` +
+                          `<p>roon-rd keeps looking and reconnects on its own when the Roon Server is back, for example after it restarts or updates.</p>`
+                        : `<p>Looking for the Roon Server on the network.</p>` +
+                          `<p>roon-rd connects on its own once it finds it.</p>`;
+                }
                 // Show blur and overlay
                 zonesContainer.classList.add('blurred');
                 authOverlay.classList.add('visible');
@@ -1548,15 +1576,22 @@ const SPA_HTML: &str = r#"<!DOCTYPE html>
                 const data = await response.json();
 
                 if (data.connected) {
+                    if (data.core_name) lastCoreName = data.core_name;
                     statusEl.className = 'status connected';
                     statusEl.textContent = data.core_name ? `Connected to Roon Server: ${data.core_name}` : 'Connected';
                     reconnectBtn.style.display = 'none';
                     updateAuthOverlay(true);  // Hide overlay - connected
+                } else if (data.state === 'authorizing') {
+                    statusEl.className = 'status authorizing';
+                    statusEl.textContent = data.core_name
+                        ? `Waiting for authorization on ${data.core_name}` : 'Waiting for authorization';
+                    reconnectBtn.style.display = 'inline-block';
+                    updateAuthOverlay(false, 'authorizing', data.core_name);
                 } else {
                     statusEl.className = 'status disconnected';
-                    statusEl.textContent = 'Roon Core Not Connected';
+                    statusEl.textContent = 'Roon Server Disconnected: reconnecting…';
                     reconnectBtn.style.display = 'inline-block';
-                    updateAuthOverlay(false);  // Show overlay - need authorization
+                    updateAuthOverlay(false, 'searching', null);
                 }
             } catch (e) {
                 statusEl.className = 'status disconnected';
@@ -2420,17 +2455,20 @@ async fn libretto_mode_css_handler() -> Response { web_asset("text/css; charset=
 async fn status_handler(State(state): State<AppState>) -> Json<StatusResponse> {
     let client = state.roon_client.lock().await;
 
-    let connected = client.is_connected().await;
-    let core_name = client.get_core_name().await;
+    let (state, core_name) = client.connection_state().await;
+    let connected = state == crate::roon::ConnectionState::Connected;
 
-    let message = if connected {
-        "Connected to Roon Core".to_string()
-    } else {
-        "Not connected. Please authorize the extension in Roon Settings > Extensions".to_string()
+    let message = match state {
+        crate::roon::ConnectionState::Connected => "Connected to Roon Core".to_string(),
+        crate::roon::ConnectionState::Authorizing =>
+            "Roon Core found. Please authorize the extension in Roon Settings > Extensions".to_string(),
+        crate::roon::ConnectionState::Searching =>
+            "Not connected. Looking for the Roon Core; will reconnect automatically".to_string(),
     };
 
     Json(StatusResponse {
         connected,
+        state,
         core_name,
         message,
     })

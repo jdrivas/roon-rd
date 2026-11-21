@@ -69,6 +69,18 @@ pub enum WsMessage {
     },
 }
 
+/// Where the Roon connection stands (see `RoonClient::connection_state`).
+#[derive(Clone, Copy, Debug, PartialEq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ConnectionState {
+    Connected,
+    /// A Core was found but hasn't registered this extension: it needs authorizing in
+    /// Roon Settings > Extensions
+    Authorizing,
+    /// No Core found yet: starting up, or reconnecting after the connection was lost
+    Searching,
+}
+
 /// How a connection attempt ended (see `RoonClient::supervise`).
 enum Attempt {
     /// The Core went away (it restarted or updated, or the network dropped).
@@ -93,6 +105,8 @@ struct Shared {
     queue_ready: Arc<Notify>,
     connected: Arc<RwLock<bool>>,
     core_name: Arc<RwLock<Option<String>>>,
+    /// The Core found by discovery, before and after it registers
+    discovered_core: Arc<RwLock<Option<String>>>,
     images: Arc<RwLock<HashMap<String, ImageData>>>,
     image_service: Arc<RwLock<Option<Image>>>,
     transport_service: Arc<RwLock<Option<Transport>>>,
@@ -122,6 +136,8 @@ pub struct RoonClient {
     queue_ready: Arc<Notify>, // Notifies when queue data arrives for active zone
     connected: Arc<RwLock<bool>>,
     core_name: Arc<RwLock<Option<String>>>,
+    /// The Core found by discovery, before and after it registers
+    discovered_core: Arc<RwLock<Option<String>>>,
     images: Arc<RwLock<HashMap<String, ImageData>>>,
     image_service: Arc<RwLock<Option<Image>>>,
     transport_service: Arc<RwLock<Option<Transport>>>,
@@ -380,6 +396,7 @@ impl RoonClient {
             queue_ready: Arc::new(Notify::new()),
             connected: Arc::new(RwLock::new(false)),
             core_name: Arc::new(RwLock::new(None)),
+            discovered_core: Arc::new(RwLock::new(None)),
             images: Arc::new(RwLock::new(HashMap::new())),
             image_service: Arc::new(RwLock::new(None)),
             transport_service: Arc::new(RwLock::new(None)),
@@ -429,6 +446,7 @@ impl RoonClient {
             queue_ready: self.queue_ready.clone(),
             connected: self.connected.clone(),
             core_name: self.core_name.clone(),
+            discovered_core: self.discovered_core.clone(),
             images: self.images.clone(),
             image_service: self.image_service.clone(),
             transport_service: self.transport_service.clone(),
@@ -581,6 +599,7 @@ impl RoonClient {
     async fn mark_disconnected(s: &Shared) {
         let was_connected = std::mem::replace(&mut *s.connected.write().await, false);
         *s.core_name.write().await = None;
+        *s.discovered_core.write().await = None;
         s.zones.write().await.clear();
         *s.image_service.write().await = None;
         *s.transport_service.write().await = None;
@@ -595,7 +614,7 @@ impl RoonClient {
     #[allow(unused_variables)]
     async fn handle_core_event(s: &Shared, core_event: CoreEvent, msg: Option<(serde_json::Value, Parsed)>) {
         let Shared {
-            zones, zones_raw_json, queues, active_queue_zone, queue_ready, connected, core_name,
+            zones, zones_raw_json, queues, active_queue_zone, queue_ready, connected, core_name, discovered_core,
             images, image_service, transport_service, browse_service, ws_tx, pending_stops,
         } = s.clone();
         match core_event {
@@ -604,6 +623,10 @@ impl RoonClient {
                 if let Some(token) = token {
                     log::debug!("Using existing token: {}", token);
                 }
+                *discovered_core.write().await = Some(core.display_name.clone());
+                // Still not connected, but the web UI should now say the Core was found and
+                // is waiting for authorization; this makes it ask for the status again.
+                let _ = ws_tx.send(WsMessage::ConnectionChanged { connected: false });
             }
             CoreEvent::Registered(mut core, _token) => {
                 log::info!("Registered with Roon Core: {}, version {}", core.display_name, core.display_version);
@@ -1024,6 +1047,19 @@ impl RoonClient {
     /// Get the name of the connected Roon Core
     pub async fn get_core_name(&self) -> Option<String> {
         self.core_name.read().await.clone()
+    }
+
+    /// The connection state, for the web UI: Connected, or a Core found but not yet
+    /// authorized in Roon, or none found (searching, or reconnecting after a loss).
+    /// With the Core's name where there is one.
+    pub async fn connection_state(&self) -> (ConnectionState, Option<String>) {
+        if *self.connected.read().await {
+            (ConnectionState::Connected, self.core_name.read().await.clone())
+        } else if let Some(core) = self.discovered_core.read().await.clone() {
+            (ConnectionState::Authorizing, Some(core))
+        } else {
+            (ConnectionState::Searching, None)
+        }
     }
 
     /// Get all available zones
