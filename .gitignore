@@ -21,3 +21,6 @@ roon-rd-config.json
 
 # Local audio files for libretto alignment experiments
 /Audio
+
+# Claude Code per-machine settings (permissions, env)
+.claude/settings.local.json
