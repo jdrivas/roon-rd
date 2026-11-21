@@ -24,15 +24,16 @@ struct MdnsHandle {
     _service: libmdns::Service,
 }
 
-/// Register mDNS service with custom hostname "roon-rd" so roon-rd.local resolves to this machine
-fn register_mdns(port: u16, local_ip: &str) -> Option<MdnsHandle> {
+/// Register mDNS service with a custom hostname (`name`, default "roon-rd") so
+/// <name>.local resolves to this machine
+fn register_mdns(port: u16, local_ip: &str, name: &str) -> Option<MdnsHandle> {
     // Parse the local IP to filter mDNS responses to just this IP
     let ip_list: Vec<IpAddr> = local_ip.parse().ok().into_iter().collect();
-    
-    // Create responder with custom hostname "roon-rd" (will become roon-rd.local)
+
+    // Create responder with the custom hostname (it becomes <name>.local)
     // Use spawn_with_ip_list_and_hostname to specify our custom hostname
     let rt = tokio::runtime::Handle::current();
-    match libmdns::Responder::spawn_with_ip_list_and_hostname(&rt, ip_list, "roon-rd".to_string()) {
+    match libmdns::Responder::spawn_with_ip_list_and_hostname(&rt, ip_list, name.to_string()) {
         Ok(responder) => {
             // Register HTTP service - this also advertises the A record for the hostname
             let service = responder.register(
@@ -41,7 +42,7 @@ fn register_mdns(port: u16, local_ip: &str) -> Option<MdnsHandle> {
                 port,
                 &["path=/"],
             );
-            log::info!("Registered mDNS: roon-rd.local:{}", port);
+            log::info!("Registered mDNS: {}.local:{}", name, port);
             Some(MdnsHandle {
                 _responder: responder,
                 _service: service,
@@ -2316,9 +2317,9 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, config: crate::config:
     let addr = format!("0.0.0.0:{}", port);
     let local_ip = get_local_ip();
     
-    // Register mDNS so roon-rd.local resolves to this machine
+    // Register mDNS so <mdns_name>.local resolves to this machine
     // Keep _mdns alive for the lifetime of the server
-    let _mdns = register_mdns(port, &local_ip);
+    let _mdns = register_mdns(port, &local_ip, &config.mdns_name);
     
     println!("\n=== Roon Remote Display Server v{} ({}) ===", env!("CARGO_PKG_VERSION"), env!("BUILD_HASH"));
     println!("Starting server on http://{}", addr);
@@ -2326,7 +2327,7 @@ pub async fn start_server(client: Arc<Mutex<RoonClient>>, config: crate::config:
     println!("  Local:   http://localhost:{}", port);
     println!("  Network: http://{}:{}", local_ip, port);
     if _mdns.is_some() {
-        println!("  mDNS:    http://roon-rd.local:{}", port);
+        println!("  mDNS:    http://{}.local:{}", config.mdns_name, port);
     }
     if libretto_path.is_some() {
         println!("  Libretto: http://localhost:{}/libretto-view", port);

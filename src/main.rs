@@ -87,6 +87,10 @@ enum Commands {
         /// Directory containing *.interchange.json files for multi-opera support
         #[arg(long)]
         libretto_dir: Option<String>,
+        /// mDNS host name without ".local" (default: roon-rd). Use a different name on
+        /// each machine that runs roon-rd
+        #[arg(long)]
+        mdns_name: Option<String>,
         /// Path to config file (default: ~/.config/roon-rd/config.toml)
         #[arg(long)]
         config: Option<String>,
@@ -173,7 +177,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
             let query_string = args.join(" ");
             cli::handle_query(client, &query_string, cli.log_level.map_or(LevelFilter::Off, |l| l.to_level_filter())).await?;
         }
-        Commands::Server { port, carousel_interval, libretto, libretto_dir, config: config_path } => {
+        Commands::Server { port, carousel_interval, libretto, libretto_dir, mdns_name, config: config_path } => {
             // Load layered config: defaults < config file < env vars < CLI args
             let app_config = config::load_config(
                 config_path.as_deref(),
@@ -182,6 +186,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                     carousel_interval,
                     libretto,
                     libretto_dir,
+                    mdns_name,
                 },
             ).map_err(|e| format!("Configuration error: {}", e))?;
 

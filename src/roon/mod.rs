@@ -4,6 +4,7 @@ use roon_api::image::{Image, Args as ImageArgs, Scaling, Scale, Format};
 use roon_api::browse::{Browse, BrowseOpts, LoadOpts};
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Duration;
 use tokio::sync::{RwLock, broadcast, Notify};
 
 /// Image data with content type
@@ -68,9 +69,52 @@ pub enum WsMessage {
     },
 }
 
+/// How a connection attempt ended (see `RoonClient::supervise`).
+enum Attempt {
+    /// The Core went away (it restarted or updated, or the network dropped).
+    Lost,
+    /// The library's event channel closed.
+    Ended,
+    /// No Core answered discovery in time.
+    NotFound,
+    /// Discovery couldn't start, or stopped after an error.
+    DiscoveryFailed,
+    /// Reconnect was asked for (the web UI's button, or the CLI).
+    ReconnectRequested,
+}
+
+/// The connection state shared between `RoonClient` and its supervisor task.
+#[derive(Clone)]
+struct Shared {
+    zones: Arc<RwLock<HashMap<String, Zone>>>,
+    zones_raw_json: Arc<RwLock<Option<String>>>,
+    queues: Arc<RwLock<HashMap<String, Vec<QueueItem>>>>,
+    active_queue_zone: Arc<RwLock<Option<String>>>,
+    queue_ready: Arc<Notify>,
+    connected: Arc<RwLock<bool>>,
+    core_name: Arc<RwLock<Option<String>>>,
+    images: Arc<RwLock<HashMap<String, ImageData>>>,
+    image_service: Arc<RwLock<Option<Image>>>,
+    transport_service: Arc<RwLock<Option<Transport>>>,
+    browse_service: Arc<RwLock<Option<Browse>>>,
+    ws_tx: broadcast::Sender<WsMessage>,
+    pending_stops: Arc<tokio::sync::Mutex<HashMap<String, tokio::task::JoinHandle<()>>>>,
+}
+
+/// First wait before reconnecting; it doubles after each failure, up to RETRY_MAX.
+const RETRY_MIN: Duration = Duration::from_secs(2);
+const RETRY_MAX: Duration = Duration::from_secs(30);
+/// How long discovery may take to find a Core before it's restarted.
+const DISCOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Wrapper for Roon API client with state management
 pub struct RoonClient {
-    api: RoonApi,
+    /// The extension's name as Roon shows it; each connection attempt builds its API from it
+    display_name: &'static str,
+    /// Wakes the supervisor to drop the connection and reconnect
+    reconnect: Arc<Notify>,
+    /// Whether the supervisor task has been started
+    supervising: bool,
     zones: Arc<RwLock<HashMap<String, Zone>>>,
     zones_raw_json: Arc<RwLock<Option<String>>>, // Last raw JSON from Roon for zones_changed
     queues: Arc<RwLock<HashMap<String, Vec<QueueItem>>>>, // zone_id -> queue items
@@ -322,23 +366,13 @@ impl RoonClient {
         let local_ip = get_local_ip();
         let display_name = format!("Roon Remote Display @ {}", local_ip);
 
-        // Construct Info manually instead of using the macro
-        let extension_id = format!("com.momentlabs.io.{}", env!("CARGO_PKG_NAME"));
-        let info = Info::new(
-            extension_id,
-            Box::leak(display_name.into_boxed_str()), // Convert to &'static str
-            env!("CARGO_PKG_VERSION"),
-            Some("Momentlabs"),
-            "david@momentlabs.io",
-            Some(env!("CARGO_PKG_REPOSITORY"))
-        );
-        let api = RoonApi::new(info);
-
         // Create broadcast channel for WebSocket updates (capacity of 100 messages)
         let (ws_tx, _) = broadcast::channel(100);
 
         Ok(RoonClient {
-            api,
+            display_name: Box::leak(display_name.into_boxed_str()), // the library wants &'static str
+            reconnect: Arc::new(Notify::new()),
+            supervising: false,
             zones: Arc::new(RwLock::new(HashMap::new())),
             zones_raw_json: Arc::new(RwLock::new(None)),
             queues: Arc::new(RwLock::new(HashMap::new())),
@@ -360,497 +394,626 @@ impl RoonClient {
         self.ws_tx.subscribe()
     }
 
-    /// Reconnect to Roon Core (triggers a new discovery)
+    /// Reconnect to Roon Core: drop the current connection, if any, and start discovery again.
     pub async fn reconnect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
-        log::info!("Reconnecting to Roon Core...");
-        self.connect().await
+        if self.supervising {
+            log::info!("Reconnecting to Roon Core...");
+            self.reconnect.notify_one();
+            Ok(())
+        } else {
+            self.connect().await
+        }
     }
 
-    /// Start the Roon API connection
+    /// Start the Roon connection. From here on a supervisor task owns it: it runs discovery,
+    /// and whenever the connection ends (the Core restarts or updates, the network drops) or
+    /// discovery fails, it starts again from scratch, waiting a little longer each time.
     pub async fn connect(&mut self) -> Result<(), Box<dyn std::error::Error>> {
+        if self.supervising {
+            self.reconnect.notify_one();
+            return Ok(());
+        }
         log::info!("Connecting to Roon Core...");
+        self.supervising = true;
+        tokio::spawn(Self::supervise(self.shared(), self.reconnect.clone(), self.display_name));
+        Ok(())
+    }
 
-        // Prepare for connection
-        let provided: HashMap<String, roon_api::Svc> = HashMap::new();
+    /// The state the Roon event handler updates, for the supervisor task.
+    fn shared(&self) -> Shared {
+        Shared {
+            zones: self.zones.clone(),
+            zones_raw_json: self.zones_raw_json.clone(),
+            queues: self.queues.clone(),
+            active_queue_zone: self.active_queue_zone.clone(),
+            queue_ready: self.queue_ready.clone(),
+            connected: self.connected.clone(),
+            core_name: self.core_name.clone(),
+            images: self.images.clone(),
+            image_service: self.image_service.clone(),
+            transport_service: self.transport_service.clone(),
+            browse_service: self.browse_service.clone(),
+            ws_tx: self.ws_tx.clone(),
+            pending_stops: self.pending_stops.clone(),
+        }
+    }
 
-        // Request transport, image, and browse services
+    /// A fresh Roon API object. Each connection attempt gets its own: the library keeps
+    /// pairing and discovery state that must not carry over from a dead connection.
+    fn make_api(display_name: &'static str) -> RoonApi {
+        let extension_id = format!("com.momentlabs.io.{}", env!("CARGO_PKG_NAME"));
+        let info = Info::new(
+            extension_id,
+            display_name,
+            env!("CARGO_PKG_VERSION"),
+            Some("Momentlabs"),
+            "david@momentlabs.io",
+            Some(env!("CARGO_PKG_REPOSITORY"))
+        );
+        RoonApi::new(info)
+    }
+
+    /// Keep a Roon connection going for the life of the process.
+    ///
+    /// The library (rust-roon-api) gives up for good when a connection is lost (its
+    /// receiver logs "Terminating Moo" and stops) and when a discovery query fails (it
+    /// logs the error and stops querying). So every attempt here is a new API object, and
+    /// when an attempt ends its tasks are aborted and the next one starts after a delay.
+    async fn supervise(s: Shared, reconnect: Arc<Notify>, display_name: &'static str) {
+        let mut delay = RETRY_MIN;
+        let mut failures: u32 = 0;
+        loop {
+            let (outcome, registered) = Self::run_attempt(&s, &reconnect, display_name).await;
+            Self::mark_disconnected(&s).await;
+            if registered {
+                delay = RETRY_MIN;
+                failures = 0;
+            }
+            let wait = match outcome {
+                Attempt::ReconnectRequested => {
+                    delay = RETRY_MIN;
+                    failures = 0;
+                    Duration::from_millis(500)
+                }
+                Attempt::Lost | Attempt::Ended => {
+                    log::warn!("Roon connection ended; reconnecting in {} s", delay.as_secs());
+                    delay
+                }
+                Attempt::NotFound | Attempt::DiscoveryFailed => {
+                    failures += 1;
+                    let why = if matches!(outcome, Attempt::NotFound) {
+                        format!("No Roon Core found within {} s", DISCOVERY_TIMEOUT.as_secs())
+                    } else {
+                        "Roon discovery stopped after an error (see above)".to_string()
+                    };
+                    // Say it loudly at first, then about every ten minutes.
+                    if failures <= 3 || failures % 20 == 0 {
+                        log::warn!(
+                            "{} (attempt {}); retrying in {} s. Check that this machine can reach \
+                             the Roon Core and, on macOS, that whatever starts roon-rd has Local \
+                             Network access (System Settings > Privacy & Security > Local Network)",
+                            why, failures, delay.as_secs());
+                    } else {
+                        log::info!("{} (attempt {}); retrying in {} s", why, failures, delay.as_secs());
+                    }
+                    delay
+                }
+            };
+            if !matches!(outcome, Attempt::ReconnectRequested) {
+                delay = (delay * 2).min(RETRY_MAX);
+            }
+            tokio::select! {
+                _ = tokio::time::sleep(wait) => {}
+                _ = reconnect.notified() => {
+                    delay = RETRY_MIN;
+                    failures = 0;
+                }
+            }
+            log::info!("Connecting to Roon Core...");
+        }
+    }
+
+    /// One connection attempt: discovery, then events until the connection ends.
+    /// Returns how it ended, and whether it got as far as registering with a Core.
+    async fn run_attempt(s: &Shared, reconnect: &Notify, display_name: &'static str) -> (Attempt, bool) {
         let services = Some(vec![
             Services::Transport(Transport::new()),
             Services::Image(Image::new()),
             Services::Browse(Browse::new()),
         ]);
+        let get_roon_state = || RoonApi::load_roon_state(CONFIG_PATH);
+        let mut api = Self::make_api(display_name);
 
-        // Get state callback - load from config file
-        let get_roon_state = || {
-            RoonApi::load_roon_state(CONFIG_PATH)
+        // In its own task, because the library panics if it can't open its discovery socket.
+        let started = tokio::spawn(async move {
+            let result = api.start_discovery(Box::new(get_roon_state), HashMap::new(), services).await;
+            (api, result)
+        }).await;
+        let (_api, mut handlers, mut core_rx) = match started {
+            Ok((api, Some((handlers, core_rx)))) => (api, handlers, core_rx),
+            Ok((_, None)) => {
+                log::error!("Failed to start Roon discovery");
+                return (Attempt::DiscoveryFailed, false);
+            }
+            Err(e) => {
+                log::error!("Failed to start Roon discovery: {}", e);
+                return (Attempt::DiscoveryFailed, false);
+            }
         };
+        log::info!("Roon API started. Please authorize this extension in Roon Settings > Extensions");
 
-        // Clone Arc references for the handler
-        let zones = self.zones.clone();
-        let zones_raw_json = self.zones_raw_json.clone();
-        let queues = self.queues.clone();
-        let active_queue_zone = self.active_queue_zone.clone();
-        let queue_ready = self.queue_ready.clone();
-        let connected = self.connected.clone();
-        let core_name = self.core_name.clone();
-        let images = self.images.clone();
-        let image_service = self.image_service.clone();
-        let transport_service = self.transport_service.clone();
-        let browse_service = self.browse_service.clone();
-        let ws_tx = self.ws_tx.clone();
-        let pending_stops = self.pending_stops.clone();
-
-        // Start discovery
-        let result = self.api.start_discovery(
-            Box::new(get_roon_state),
-            provided,
-            services,
-        ).await;
-
-        if let Some((mut handlers, mut core_rx)) = result {
-            log::info!("Roon API started. Please authorize this extension in Roon Settings > Extensions");
-
-            // Spawn handler for core events and transport updates
-            handlers.spawn(async move {
-                while let Some((core_event, msg)) = core_rx.recv().await {
-                    match core_event {
-                        CoreEvent::Discovered(core, token) => {
-                            log::info!("Discovered Roon Core: {}, version {}", core.display_name, core.display_version);
-                            if let Some(token) = token {
-                                log::debug!("Using existing token: {}", token);
-                            }
-                        }
-                        CoreEvent::Registered(mut core, _token) => {
-                            log::info!("Registered with Roon Core: {}, version {}", core.display_name, core.display_version);
-
-                            // Update connection state
-                            *connected.write().await = true;
-                            *core_name.write().await = Some(core.display_name.clone());
-
-                            // Broadcast connection change
-                            let _ = ws_tx.send(WsMessage::ConnectionChanged { connected: true });
-
-                            // Subscribe to zone updates if we have transport service
-                            if let Some(transport) = core.get_transport() {
-                                log::info!("Subscribing to zone updates...");
-                                transport.subscribe_zones().await;
-                                *transport_service.write().await = Some(transport.clone());
-                            }
-
-                            // Store image service reference
-                            if let Some(img) = core.get_image() {
-                                log::info!("Image service available");
-                                *image_service.write().await = Some(img.clone());
-                            }
-
-                            // Store browse service reference
-                            if let Some(browse) = core.get_browse() {
-                                log::info!("Browse service available");
-                                *browse_service.write().await = Some(browse.clone());
-                            }
-                        }
-                        CoreEvent::Lost(core) => {
-                            log::warn!("Lost connection to Roon Core: {}, version {}", core.display_name, core.display_version);
-                            *connected.write().await = false;
-                            *core_name.write().await = None;
-                            zones.write().await.clear();
-                            *image_service.write().await = None;
-                            *transport_service.write().await = None;
-                            *browse_service.write().await = None;
-
-                            // Broadcast connection change
-                            let _ = ws_tx.send(WsMessage::ConnectionChanged { connected: false });
-                        }
-                        CoreEvent::None => {}
-                    }
-
-                    // Handle messages via Parsed enum
-                    if let Some((raw_msg, parsed)) = msg {
-                        match parsed {
-                            Parsed::RoonState(roon_state) => {
-                                // Save state to persist authorization token
-                                if let Err(e) = RoonApi::save_roon_state(CONFIG_PATH, roon_state) {
-                                    log::error!("Failed to save Roon state: {}", e);
-                                }
-                            }
-                            Parsed::Zones(zones_changed) => {
-                                log::debug!("Roon API Zones response:\n{:#?}", zones_changed);
-                                log::debug!("Zones changed, updating zone map");
-
-                                // Capture and store raw JSON for TUI display
-                                let raw_json = serde_json::to_string_pretty(&raw_msg).ok();
-                                *zones_raw_json.write().await = raw_json;
-
-                                let mut zone_map = zones.write().await;
-
-                                // Collect image keys to request
-                                let mut image_keys_to_request = Vec::new();
-
-                                // Update zones that changed
-                                for zone in zones_changed {
-                                    // If the zone has now_playing with an image_key, queue it for download
-                                    if let Some(ref now_playing) = zone.now_playing {
-                                        if let Some(ref image_key) = now_playing.image_key {
-                                            // Check if we don't already have this image cached
-                                            if !images.read().await.contains_key(image_key) {
-                                                image_keys_to_request.push(image_key.clone());
-                                            }
-                                        }
-                                    }
-                                    zone_map.insert(zone.zone_id.clone(), zone);
-                                }
-
-                                // Release the zone_map lock before requesting images
-                                drop(zone_map);
-
-                                // Request any new images
-                                if !image_keys_to_request.is_empty() {
-                                    let img_svc = image_service.read().await;
-                                    if let Some(img) = img_svc.as_ref() {
-                                        for image_key in image_keys_to_request {
-                                            log::info!("Proactively requesting album art: {}", image_key);
-                                            let scaling = Scaling::new(Scale::Fit, 300, 300);
-                                            let args = ImageArgs::new(Some(scaling), Some(Format::Jpeg));
-                                            img.get_image(&image_key, args).await;
-                                        }
-                                    }
-                                }
-
-                                // Check zone states to determine broadcast strategy
-                                let zones_snapshot = zones.read().await.clone();
-
-                                // Categorize zones by state
-                                let mut has_stopped_zones = Vec::new();
-                                let mut has_non_stop_zones = Vec::new();
-                                let has_dcs_playing_zones: Vec<_> = zones_snapshot.iter()
-                                    .filter(|(_, zone)| zone.display_name.starts_with("dCS Vivaldi") && zone.state == State::Playing)
-                                    .map(|(id, _)| id.clone())
-                                    .collect();
-
-                                for (zone_id, zone) in &zones_snapshot {
-                                    match zone.state {
-                                        State::Stopped => has_stopped_zones.push(zone_id.clone()),
-                                        State::Loading | State::Playing | State::Paused => has_non_stop_zones.push(zone_id.clone()),
-                                    }
-                                }
-
-                                // Handle pending stops for zones that are no longer stopped
-                                let pending_stops_clone = pending_stops.clone();
-                                for zone_id in &has_non_stop_zones {
-                                    let mut pending = pending_stops_clone.lock().await;
-                                    if let Some(task) = pending.remove(zone_id) {
-                                        log::debug!("Cancelling pending stop for zone {} due to state change", zone_id);
-                                        task.abort();
-                                    }
-                                }
-
-                                // Handle stopped zones with delay logic
-                                for zone_id in &has_stopped_zones {
-                                    let mut pending = pending_stops_clone.lock().await;
-                                    if let Some(existing_task) = pending.remove(zone_id) {
-                                        // There's already a pending stop - cancel it and broadcast immediately
-                                        log::debug!("Zone {} stopped again - broadcasting immediately (user intent)", zone_id);
-                                        existing_task.abort();
-                                        drop(pending); // Release lock before broadcasting
-
-                                        let zones_clone = zones.clone();
-                                        let zones_raw_json_clone = zones_raw_json.clone();
-                                        let ws_tx_clone = ws_tx.clone();
-                                        tokio::spawn(async move {
-                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
-                                            log::debug!("Broadcasting immediate stop for zone (double-stop detected)");
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
-                                        });
-                                    } else {
-                                        // No pending stop - start delayed broadcast
-                                        log::debug!("Zone {} stopped - delaying broadcast by {}ms", zone_id, STOP_BROADCAST_DELAY_MS);
-
-                                        let ws_tx_clone = ws_tx.clone();
-                                        let zones_clone = zones.clone();
-                                        let zones_raw_json_clone = zones_raw_json.clone();
-                                        let zone_id_clone = zone_id.clone();
-                                        let pending_stops_clone2 = pending_stops_clone.clone();
-
-                                        let task = tokio::spawn(async move {
-                                            tokio::time::sleep(tokio::time::Duration::from_millis(STOP_BROADCAST_DELAY_MS)).await;
-
-                                            // Build and broadcast stop
-                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
-                                            log::debug!("Broadcasting delayed stop for zone {}", zone_id_clone);
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
-
-                                            // Remove self from pending map
-                                            pending_stops_clone2.lock().await.remove(&zone_id_clone);
-                                        });
-
-                                        pending.insert(zone_id.clone(), task);
-                                    }
-                                }
-
-                                // Skip broadcasting if we only have "loading" state zones
-                                let has_non_loading = zones_snapshot.values()
-                                    .any(|zone| zone.state != State::Loading);
-
-                                // Broadcast non-stop zone updates immediately
-                                if !has_non_stop_zones.is_empty() && has_non_loading {
-                                    if !has_dcs_playing_zones.is_empty() {
-                                        // If we have dCS zones in Playing state, give dCS device a moment to update
-                                        log::debug!("Found {} dCS zones in Playing state, waiting {}ms for dCS to update",
-                                                   has_dcs_playing_zones.len(), DCS_UPDATE_DELAY_MS);
-
-                                        let ws_tx_clone = ws_tx.clone();
-                                        let zones_clone = zones.clone();
-                                        let zones_raw_json_clone = zones_raw_json.clone();
-
-                                        tokio::spawn(async move {
-                                            // Brief delay to let dCS device process the new stream
-                                            tokio::time::sleep(tokio::time::Duration::from_millis(DCS_UPDATE_DELAY_MS)).await;
-
-                                            // Build zone data with dCS format
-                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
-
-                                            // Broadcast zone change with full data
-                                            log::debug!("Broadcasting zone change (after dCS delay) with {} zones of data", zone_data.len());
-                                            for item in &zone_data {
-                                                log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
-                                                           item.zone_name, item.state, item.track, item.dcs_format);
-                                            }
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
-                                        });
-                                    } else {
-                                        // No dCS zones in Playing state, build and broadcast immediately
-                                        let zones_clone = zones.clone();
-                                        let zones_raw_json_clone = zones_raw_json.clone();
-                                        let ws_tx_clone = ws_tx.clone();
-                                        tokio::spawn(async move {
-                                            let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
-                                            log::debug!("Broadcasting zone change (no dCS delay) with {} zones of data", zone_data.len());
-                                            for item in &zone_data {
-                                                log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
-                                                           item.zone_name, item.state, item.track, item.dcs_format);
-                                            }
-                                            let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
-                                        });
-                                    }
-                                } else if has_stopped_zones.is_empty() && !has_non_loading {
-                                    log::debug!("Skipping zone change broadcast - all zones in 'loading' state");
-                                }
-                            }
-                            Parsed::ZonesRemoved(zones_removed) => {
-                                log::debug!("Roon API ZonesRemoved response:\n{:#?}", zones_removed);
-                                log::debug!("Zones removed");
-                                let mut zone_map = zones.write().await;
-
-                                // Remove zones that are gone
-                                for zone_id in zones_removed {
-                                    zone_map.remove(&zone_id);
-                                }
-
-                                // Broadcast zone change with full data via WebSocket
-                                let zones_clone = zones.clone();
-                                let zones_raw_json_clone = zones_raw_json.clone();
-                                let ws_tx_clone = ws_tx.clone();
-                                tokio::spawn(async move {
-                                    let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
-                                    log::debug!("Broadcasting zone removal with {} zones of data", zone_data.len());
-                                    for item in &zone_data {
-                                        log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
-                                                   item.zone_name, item.state, item.track, item.dcs_format);
-                                    }
-                                    let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
-                                });
-                            }
-                            Parsed::ZonesSeek(zones_seek) => {
-                                log::trace!("Roon API ZonesSeek response:\n{:#?}", zones_seek);
-                                log::trace!("Zone seek position updated");
-                                let mut zone_map = zones.write().await;
-
-                                // Update seek positions and broadcast individual updates
-                                for zone_seek in zones_seek {
-                                    if let Some(zone) = zone_map.get_mut(&zone_seek.zone_id) {
-                                        if let Some(now_playing) = zone.now_playing.as_mut() {
-                                            now_playing.seek_position = zone_seek.seek_position;
-                                        }
-                                    }
-
-                                    // Broadcast seek update for this zone
-                                    let _ = ws_tx.send(WsMessage::SeekUpdated {
-                                        zone_id: zone_seek.zone_id,
-                                        seek_position: zone_seek.seek_position,
-                                        queue_time_remaining: zone_seek.queue_time_remaining,
-                                    });
-                                }
-                            }
-                            Parsed::Jpeg((image_key, data)) => {
-                                log::debug!("Roon API JPEG image response: key={}, size={} bytes", image_key, data.len());
-                                images.write().await.insert(image_key, ImageData {
-                                    content_type: "image/jpeg".to_string(),
-                                    data,
-                                });
-                            }
-                            Parsed::Png((image_key, data)) => {
-                                log::debug!("Roon API PNG image response: key={}, size={} bytes", image_key, data.len());
-                                images.write().await.insert(image_key, ImageData {
-                                    content_type: "image/png".to_string(),
-                                    data,
-                                });
-                            }
-                            Parsed::BrowseResult(result, session_key) => {
-                                log::debug!("Roon API BrowseResult response:\n{:#?}", result);
-                                log::info!("Browse result - action: {:?}", result.action);
-                                if let Some(item) = &result.item {
-                                    log::info!("  Item title: {}", item.title);
-                                    if let Some(subtitle) = &item.subtitle {
-                                        log::info!("  Item subtitle: {}", subtitle);
-                                    }
-                                }
-                                if let Some(list) = &result.list {
-                                    log::info!("  List title: {}", list.title);
-                                    if let Some(subtitle) = &list.subtitle {
-                                        log::info!("  List subtitle: {}", subtitle);
-                                    }
-
-                                    // Auto-load the list to see what items are available
-                                    let browse_svc = browse_service.read().await;
-                                    if let Some(browse) = browse_svc.as_ref() {
-                                        log::info!("  Loading list items...");
-                                        let opts = LoadOpts {
-                                            multi_session_key: session_key,
-                                            offset: 0,
-                                            count: Some(list.count.min(20)), // Limit to first 20 items
-                                            set_display_offset: 0,
-                                            ..Default::default()
-                                        };
-                                        browse.load(&opts).await;
-                                    }
-                                }
-                            }
-                            Parsed::LoadResult(result, session_key) => {
-                                log::debug!("Roon API LoadResult response:\n{:#?}", result);
-                                log::info!("Load result - {} items", result.items.len());
-                                let mut now_playing_item_key = None;
-
-                                for (i, item) in result.items.iter().enumerate() {
-                                    log::info!("  Item {}: {}", i, item.title);
-                                    if let Some(subtitle) = &item.subtitle {
-                                        log::info!("    Subtitle: {}", subtitle);
-                                    }
-
-                                    // Look for "Now Playing" or "Queue" items to browse into
-                                    if (item.title.contains("Now Playing") || item.title.contains("Queue"))
-                                        && item.item_key.is_some() && now_playing_item_key.is_none() {
-                                        now_playing_item_key = item.item_key.clone();
-                                    }
-                                }
-
-                                // If we found a "Now Playing" item, browse into it
-                                if let Some(item_key) = now_playing_item_key {
-                                    let browse_svc = browse_service.read().await;
-                                    if let Some(browse) = browse_svc.as_ref() {
-                                        log::info!("Browsing into Now Playing/Queue...");
-                                        let opts = BrowseOpts {
-                                            multi_session_key: session_key,
-                                            item_key: Some(item_key),
-                                            ..Default::default()
-                                        };
-                                        browse.browse(&opts).await;
-                                    }
-                                }
-                            }
-                            Parsed::Queue(queue_items) => {
-                                log::debug!("Roon API Queue response:\n{:#?}", queue_items);
-                                log::info!("Queue snapshot - {} items", queue_items.len());
-
-                                // Store queue for the active subscribed zone
-                                let active_zone = active_queue_zone.read().await;
-                                if let Some(zone_id) = active_zone.as_ref() {
-                                    log::info!("Storing queue for active zone: {}", zone_id);
-                                    queues.write().await.insert(zone_id.clone(), queue_items);
-
-                                    // Notify waiting subscribers that queue data has arrived
-                                    queue_ready.notify_waiters();
-                                } else {
-                                    log::warn!("Received queue data but no active queue zone subscription");
-                                }
-                            }
-                            Parsed::QueueChanges(queue_changes) => {
-                                log::debug!("Roon API QueueChanges response:\n{:#?}", queue_changes);
-                                log::info!("Queue changes - {} operations", queue_changes.len());
-
-                                // Apply changes to the active zone's queue
-                                let active_zone = active_queue_zone.read().await;
-                                if let Some(zone_id) = active_zone.as_ref() {
-                                    let mut queues_map = queues.write().await;
-                                    if let Some(queue) = queues_map.get_mut(zone_id) {
-                                        for change in queue_changes {
-                                            log::info!("  Operation: {:?} at index {}", change.operation, change.index);
-
-                                            match change.operation {
-                                                roon_api::transport::QueueOperation::Insert => {
-                                                    if let Some(items) = &change.items {
-                                                        let idx = change.index;
-                                                        for (i, item) in items.iter().enumerate() {
-                                                            log::info!("    Inserting: {} (id: {})", item.two_line.line1, item.queue_item_id);
-                                                            // Items from queue changes are already QueueItem
-                                                            queue.insert(idx + i, item.clone());
-                                                        }
-                                                    }
-                                                }
-                                                roon_api::transport::QueueOperation::Remove => {
-                                                    let count = change.count.unwrap_or(1);
-                                                    let idx = change.index;
-                                                    log::info!("    Removing {} items at index {}", count, idx);
-                                                    for _ in 0..count {
-                                                        if idx < queue.len() {
-                                                            queue.remove(idx);
-                                                        }
-                                                    }
-                                                }
-                                            }
-                                        }
-                                        log::info!("Queue updated for zone {} - now has {} items", zone_id, queue.len());
-
-                                        // Get queue info from zone data
-                                        let zones_map = zones.read().await;
-                                        let (queue_items_remaining, queue_time_remaining) = zones_map
-                                            .get(zone_id)
-                                            .map(|z| (z.queue_items_remaining, z.queue_time_remaining))
-                                            .unwrap_or((0, 0));
-                                        drop(zones_map);
-
-                                        // Notify frontend via WebSocket that queue has changed
-                                        let _ = ws_tx.send(WsMessage::QueueChanged {
-                                            zone_id: zone_id.clone(),
-                                            queue_items_remaining,
-                                            queue_time_remaining,
-                                        });
-                                    } else {
-                                        log::warn!("Received queue changes for zone {} but no queue cached", zone_id);
-                                    }
-                                } else {
-                                    log::warn!("Received queue changes but no active queue zone subscription");
-                                }
-                            }
-                            Parsed::Error(err) => {
-                                log::error!("Roon API error: {}", err);
-                            }
+        let deadline = tokio::time::sleep(DISCOVERY_TIMEOUT);
+        tokio::pin!(deadline);
+        let (mut discovered, mut registered) = (false, false);
+        let outcome = loop {
+            tokio::select! {
+                event = core_rx.recv() => match event {
+                    None => break Attempt::Ended,
+                    Some((core_event, msg)) => {
+                        let lost = matches!(core_event, CoreEvent::Lost(_));
+                        match &core_event {
+                            CoreEvent::Discovered(..) => discovered = true,
+                            CoreEvent::Registered(..) => registered = true,
                             _ => {}
                         }
+                        Self::handle_core_event(s, core_event, msg).await;
+                        if lost {
+                            break Attempt::Lost;
+                        }
                     }
-                }
-            });
+                },
+                _ = &mut deadline, if !discovered => break Attempt::NotFound,
+                _ = reconnect.notified() => break Attempt::ReconnectRequested,
+                // Before a Core is found, any library task ending means discovery has died
+                // (for example, a query failed with "No route to host").
+                Some(_) = handlers.join_next(), if !discovered => break Attempt::DiscoveryFailed,
+            }
+        };
 
-            // Keep handlers alive
-            tokio::spawn(async move {
-                while let Some(_) = handlers.join_next().await {
-                    // Keep running
+        // Stop this attempt's tasks and wait for them, so their sockets are closed before
+        // the next attempt opens new ones.
+        handlers.abort_all();
+        while handlers.join_next().await.is_some() {}
+        (outcome, registered)
+    }
+
+    /// Clear the connection state, telling the web clients if it was connected.
+    async fn mark_disconnected(s: &Shared) {
+        let was_connected = std::mem::replace(&mut *s.connected.write().await, false);
+        *s.core_name.write().await = None;
+        s.zones.write().await.clear();
+        *s.image_service.write().await = None;
+        *s.transport_service.write().await = None;
+        *s.browse_service.write().await = None;
+        if was_connected {
+            let _ = s.ws_tx.send(WsMessage::ConnectionChanged { connected: false });
+        }
+    }
+
+    /// Handle one event from the Roon API: a Core found, registered or lost, and the
+    /// messages from its services.
+    #[allow(unused_variables)]
+    async fn handle_core_event(s: &Shared, core_event: CoreEvent, msg: Option<(serde_json::Value, Parsed)>) {
+        let Shared {
+            zones, zones_raw_json, queues, active_queue_zone, queue_ready, connected, core_name,
+            images, image_service, transport_service, browse_service, ws_tx, pending_stops,
+        } = s.clone();
+        match core_event {
+            CoreEvent::Discovered(core, token) => {
+                log::info!("Discovered Roon Core: {}, version {}", core.display_name, core.display_version);
+                if let Some(token) = token {
+                    log::debug!("Using existing token: {}", token);
                 }
-            });
-        } else {
-            return Err("Failed to start Roon discovery".into());
+            }
+            CoreEvent::Registered(mut core, _token) => {
+                log::info!("Registered with Roon Core: {}, version {}", core.display_name, core.display_version);
+
+                // Update connection state
+                *connected.write().await = true;
+                *core_name.write().await = Some(core.display_name.clone());
+
+                // Broadcast connection change
+                let _ = ws_tx.send(WsMessage::ConnectionChanged { connected: true });
+
+                // Subscribe to zone updates if we have transport service
+                if let Some(transport) = core.get_transport() {
+                    log::info!("Subscribing to zone updates...");
+                    transport.subscribe_zones().await;
+                    *transport_service.write().await = Some(transport.clone());
+                }
+
+                // Store image service reference
+                if let Some(img) = core.get_image() {
+                    log::info!("Image service available");
+                    *image_service.write().await = Some(img.clone());
+                }
+
+                // Store browse service reference
+                if let Some(browse) = core.get_browse() {
+                    log::info!("Browse service available");
+                    *browse_service.write().await = Some(browse.clone());
+                }
+            }
+            CoreEvent::Lost(core) => {
+                log::warn!("Lost connection to Roon Core: {}, version {}", core.display_name, core.display_version);
+                Self::mark_disconnected(s).await;
+            }
+            CoreEvent::None => {}
         }
 
-        Ok(())
+        // Handle messages via Parsed enum
+        if let Some((raw_msg, parsed)) = msg {
+            match parsed {
+                Parsed::RoonState(roon_state) => {
+                    // Save state to persist authorization token
+                    if let Err(e) = RoonApi::save_roon_state(CONFIG_PATH, roon_state) {
+                        log::error!("Failed to save Roon state: {}", e);
+                    }
+                }
+                Parsed::Zones(zones_changed) => {
+                    log::debug!("Roon API Zones response:\n{:#?}", zones_changed);
+                    log::debug!("Zones changed, updating zone map");
+
+                    // Capture and store raw JSON for TUI display
+                    let raw_json = serde_json::to_string_pretty(&raw_msg).ok();
+                    *zones_raw_json.write().await = raw_json;
+
+                    let mut zone_map = zones.write().await;
+
+                    // Collect image keys to request
+                    let mut image_keys_to_request = Vec::new();
+
+                    // Update zones that changed
+                    for zone in zones_changed {
+                        // If the zone has now_playing with an image_key, queue it for download
+                        if let Some(ref now_playing) = zone.now_playing {
+                            if let Some(ref image_key) = now_playing.image_key {
+                                // Check if we don't already have this image cached
+                                if !images.read().await.contains_key(image_key) {
+                                    image_keys_to_request.push(image_key.clone());
+                                }
+                            }
+                        }
+                        zone_map.insert(zone.zone_id.clone(), zone);
+                    }
+
+                    // Release the zone_map lock before requesting images
+                    drop(zone_map);
+
+                    // Request any new images
+                    if !image_keys_to_request.is_empty() {
+                        let img_svc = image_service.read().await;
+                        if let Some(img) = img_svc.as_ref() {
+                            for image_key in image_keys_to_request {
+                                log::info!("Proactively requesting album art: {}", image_key);
+                                let scaling = Scaling::new(Scale::Fit, 300, 300);
+                                let args = ImageArgs::new(Some(scaling), Some(Format::Jpeg));
+                                img.get_image(&image_key, args).await;
+                            }
+                        }
+                    }
+
+                    // Check zone states to determine broadcast strategy
+                    let zones_snapshot = zones.read().await.clone();
+
+                    // Categorize zones by state
+                    let mut has_stopped_zones = Vec::new();
+                    let mut has_non_stop_zones = Vec::new();
+                    let has_dcs_playing_zones: Vec<_> = zones_snapshot.iter()
+                        .filter(|(_, zone)| zone.display_name.starts_with("dCS Vivaldi") && zone.state == State::Playing)
+                        .map(|(id, _)| id.clone())
+                        .collect();
+
+                    for (zone_id, zone) in &zones_snapshot {
+                        match zone.state {
+                            State::Stopped => has_stopped_zones.push(zone_id.clone()),
+                            State::Loading | State::Playing | State::Paused => has_non_stop_zones.push(zone_id.clone()),
+                        }
+                    }
+
+                    // Handle pending stops for zones that are no longer stopped
+                    let pending_stops_clone = pending_stops.clone();
+                    for zone_id in &has_non_stop_zones {
+                        let mut pending = pending_stops_clone.lock().await;
+                        if let Some(task) = pending.remove(zone_id) {
+                            log::debug!("Cancelling pending stop for zone {} due to state change", zone_id);
+                            task.abort();
+                        }
+                    }
+
+                    // Handle stopped zones with delay logic
+                    for zone_id in &has_stopped_zones {
+                        let mut pending = pending_stops_clone.lock().await;
+                        if let Some(existing_task) = pending.remove(zone_id) {
+                            // There's already a pending stop - cancel it and broadcast immediately
+                            log::debug!("Zone {} stopped again - broadcasting immediately (user intent)", zone_id);
+                            existing_task.abort();
+                            drop(pending); // Release lock before broadcasting
+
+                            let zones_clone = zones.clone();
+                            let zones_raw_json_clone = zones_raw_json.clone();
+                            let ws_tx_clone = ws_tx.clone();
+                            tokio::spawn(async move {
+                                let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
+                                log::debug!("Broadcasting immediate stop for zone (double-stop detected)");
+                                let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
+                            });
+                        } else {
+                            // No pending stop - start delayed broadcast
+                            log::debug!("Zone {} stopped - delaying broadcast by {}ms", zone_id, STOP_BROADCAST_DELAY_MS);
+
+                            let ws_tx_clone = ws_tx.clone();
+                            let zones_clone = zones.clone();
+                            let zones_raw_json_clone = zones_raw_json.clone();
+                            let zone_id_clone = zone_id.clone();
+                            let pending_stops_clone2 = pending_stops_clone.clone();
+
+                            let task = tokio::spawn(async move {
+                                tokio::time::sleep(tokio::time::Duration::from_millis(STOP_BROADCAST_DELAY_MS)).await;
+
+                                // Build and broadcast stop
+                                let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
+                                log::debug!("Broadcasting delayed stop for zone {}", zone_id_clone);
+                                let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
+
+                                // Remove self from pending map
+                                pending_stops_clone2.lock().await.remove(&zone_id_clone);
+                            });
+
+                            pending.insert(zone_id.clone(), task);
+                        }
+                    }
+
+                    // Skip broadcasting if we only have "loading" state zones
+                    let has_non_loading = zones_snapshot.values()
+                        .any(|zone| zone.state != State::Loading);
+
+                    // Broadcast non-stop zone updates immediately
+                    if !has_non_stop_zones.is_empty() && has_non_loading {
+                        if !has_dcs_playing_zones.is_empty() {
+                            // If we have dCS zones in Playing state, give dCS device a moment to update
+                            log::debug!("Found {} dCS zones in Playing state, waiting {}ms for dCS to update",
+                                       has_dcs_playing_zones.len(), DCS_UPDATE_DELAY_MS);
+
+                            let ws_tx_clone = ws_tx.clone();
+                            let zones_clone = zones.clone();
+                            let zones_raw_json_clone = zones_raw_json.clone();
+
+                            tokio::spawn(async move {
+                                // Brief delay to let dCS device process the new stream
+                                tokio::time::sleep(tokio::time::Duration::from_millis(DCS_UPDATE_DELAY_MS)).await;
+
+                                // Build zone data with dCS format
+                                let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
+
+                                // Broadcast zone change with full data
+                                log::debug!("Broadcasting zone change (after dCS delay) with {} zones of data", zone_data.len());
+                                for item in &zone_data {
+                                    log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
+                                               item.zone_name, item.state, item.track, item.dcs_format);
+                                }
+                                let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
+                            });
+                        } else {
+                            // No dCS zones in Playing state, build and broadcast immediately
+                            let zones_clone = zones.clone();
+                            let zones_raw_json_clone = zones_raw_json.clone();
+                            let ws_tx_clone = ws_tx.clone();
+                            tokio::spawn(async move {
+                                let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
+                                log::debug!("Broadcasting zone change (no dCS delay) with {} zones of data", zone_data.len());
+                                for item in &zone_data {
+                                    log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
+                                               item.zone_name, item.state, item.track, item.dcs_format);
+                                }
+                                let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
+                            });
+                        }
+                    } else if has_stopped_zones.is_empty() && !has_non_loading {
+                        log::debug!("Skipping zone change broadcast - all zones in 'loading' state");
+                    }
+                }
+                Parsed::ZonesRemoved(zones_removed) => {
+                    log::debug!("Roon API ZonesRemoved response:\n{:#?}", zones_removed);
+                    log::debug!("Zones removed");
+                    let mut zone_map = zones.write().await;
+
+                    // Remove zones that are gone
+                    for zone_id in zones_removed {
+                        zone_map.remove(&zone_id);
+                    }
+
+                    // Broadcast zone change with full data via WebSocket
+                    let zones_clone = zones.clone();
+                    let zones_raw_json_clone = zones_raw_json.clone();
+                    let ws_tx_clone = ws_tx.clone();
+                    tokio::spawn(async move {
+                        let (zone_data, raw_zones, raw_json) = build_ws_zone_data_from_zones(zones_clone, zones_raw_json_clone).await;
+                        log::debug!("Broadcasting zone removal with {} zones of data", zone_data.len());
+                        for item in &zone_data {
+                            log::debug!("  Broadcasting zone {}: state={}, track={:?}, dcs_format={:?}",
+                                       item.zone_name, item.state, item.track, item.dcs_format);
+                        }
+                        let _ = ws_tx_clone.send(WsMessage::ZonesChanged { now_playing: zone_data, raw_zones, raw_json });
+                    });
+                }
+                Parsed::ZonesSeek(zones_seek) => {
+                    log::trace!("Roon API ZonesSeek response:\n{:#?}", zones_seek);
+                    log::trace!("Zone seek position updated");
+                    let mut zone_map = zones.write().await;
+
+                    // Update seek positions and broadcast individual updates
+                    for zone_seek in zones_seek {
+                        if let Some(zone) = zone_map.get_mut(&zone_seek.zone_id) {
+                            if let Some(now_playing) = zone.now_playing.as_mut() {
+                                now_playing.seek_position = zone_seek.seek_position;
+                            }
+                        }
+
+                        // Broadcast seek update for this zone
+                        let _ = ws_tx.send(WsMessage::SeekUpdated {
+                            zone_id: zone_seek.zone_id,
+                            seek_position: zone_seek.seek_position,
+                            queue_time_remaining: zone_seek.queue_time_remaining,
+                        });
+                    }
+                }
+                Parsed::Jpeg((image_key, data)) => {
+                    log::debug!("Roon API JPEG image response: key={}, size={} bytes", image_key, data.len());
+                    images.write().await.insert(image_key, ImageData {
+                        content_type: "image/jpeg".to_string(),
+                        data,
+                    });
+                }
+                Parsed::Png((image_key, data)) => {
+                    log::debug!("Roon API PNG image response: key={}, size={} bytes", image_key, data.len());
+                    images.write().await.insert(image_key, ImageData {
+                        content_type: "image/png".to_string(),
+                        data,
+                    });
+                }
+                Parsed::BrowseResult(result, session_key) => {
+                    log::debug!("Roon API BrowseResult response:\n{:#?}", result);
+                    log::info!("Browse result - action: {:?}", result.action);
+                    if let Some(item) = &result.item {
+                        log::info!("  Item title: {}", item.title);
+                        if let Some(subtitle) = &item.subtitle {
+                            log::info!("  Item subtitle: {}", subtitle);
+                        }
+                    }
+                    if let Some(list) = &result.list {
+                        log::info!("  List title: {}", list.title);
+                        if let Some(subtitle) = &list.subtitle {
+                            log::info!("  List subtitle: {}", subtitle);
+                        }
+
+                        // Auto-load the list to see what items are available
+                        let browse_svc = browse_service.read().await;
+                        if let Some(browse) = browse_svc.as_ref() {
+                            log::info!("  Loading list items...");
+                            let opts = LoadOpts {
+                                multi_session_key: session_key,
+                                offset: 0,
+                                count: Some(list.count.min(20)), // Limit to first 20 items
+                                set_display_offset: 0,
+                                ..Default::default()
+                            };
+                            browse.load(&opts).await;
+                        }
+                    }
+                }
+                Parsed::LoadResult(result, session_key) => {
+                    log::debug!("Roon API LoadResult response:\n{:#?}", result);
+                    log::info!("Load result - {} items", result.items.len());
+                    let mut now_playing_item_key = None;
+
+                    for (i, item) in result.items.iter().enumerate() {
+                        log::info!("  Item {}: {}", i, item.title);
+                        if let Some(subtitle) = &item.subtitle {
+                            log::info!("    Subtitle: {}", subtitle);
+                        }
+
+                        // Look for "Now Playing" or "Queue" items to browse into
+                        if (item.title.contains("Now Playing") || item.title.contains("Queue"))
+                            && item.item_key.is_some() && now_playing_item_key.is_none() {
+                            now_playing_item_key = item.item_key.clone();
+                        }
+                    }
+
+                    // If we found a "Now Playing" item, browse into it
+                    if let Some(item_key) = now_playing_item_key {
+                        let browse_svc = browse_service.read().await;
+                        if let Some(browse) = browse_svc.as_ref() {
+                            log::info!("Browsing into Now Playing/Queue...");
+                            let opts = BrowseOpts {
+                                multi_session_key: session_key,
+                                item_key: Some(item_key),
+                                ..Default::default()
+                            };
+                            browse.browse(&opts).await;
+                        }
+                    }
+                }
+                Parsed::Queue(queue_items) => {
+                    log::debug!("Roon API Queue response:\n{:#?}", queue_items);
+                    log::info!("Queue snapshot - {} items", queue_items.len());
+
+                    // Store queue for the active subscribed zone
+                    let active_zone = active_queue_zone.read().await;
+                    if let Some(zone_id) = active_zone.as_ref() {
+                        log::info!("Storing queue for active zone: {}", zone_id);
+                        queues.write().await.insert(zone_id.clone(), queue_items);
+
+                        // Notify waiting subscribers that queue data has arrived
+                        queue_ready.notify_waiters();
+                    } else {
+                        log::warn!("Received queue data but no active queue zone subscription");
+                    }
+                }
+                Parsed::QueueChanges(queue_changes) => {
+                    log::debug!("Roon API QueueChanges response:\n{:#?}", queue_changes);
+                    log::info!("Queue changes - {} operations", queue_changes.len());
+
+                    // Apply changes to the active zone's queue
+                    let active_zone = active_queue_zone.read().await;
+                    if let Some(zone_id) = active_zone.as_ref() {
+                        let mut queues_map = queues.write().await;
+                        if let Some(queue) = queues_map.get_mut(zone_id) {
+                            for change in queue_changes {
+                                log::info!("  Operation: {:?} at index {}", change.operation, change.index);
+
+                                match change.operation {
+                                    roon_api::transport::QueueOperation::Insert => {
+                                        if let Some(items) = &change.items {
+                                            let idx = change.index;
+                                            for (i, item) in items.iter().enumerate() {
+                                                log::info!("    Inserting: {} (id: {})", item.two_line.line1, item.queue_item_id);
+                                                // Items from queue changes are already QueueItem
+                                                queue.insert(idx + i, item.clone());
+                                            }
+                                        }
+                                    }
+                                    roon_api::transport::QueueOperation::Remove => {
+                                        let count = change.count.unwrap_or(1);
+                                        let idx = change.index;
+                                        log::info!("    Removing {} items at index {}", count, idx);
+                                        for _ in 0..count {
+                                            if idx < queue.len() {
+                                                queue.remove(idx);
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                            log::info!("Queue updated for zone {} - now has {} items", zone_id, queue.len());
+
+                            // Get queue info from zone data
+                            let zones_map = zones.read().await;
+                            let (queue_items_remaining, queue_time_remaining) = zones_map
+                                .get(zone_id)
+                                .map(|z| (z.queue_items_remaining, z.queue_time_remaining))
+                                .unwrap_or((0, 0));
+                            drop(zones_map);
+
+                            // Notify frontend via WebSocket that queue has changed
+                            let _ = ws_tx.send(WsMessage::QueueChanged {
+                                zone_id: zone_id.clone(),
+                                queue_items_remaining,
+                                queue_time_remaining,
+                            });
+                        } else {
+                            log::warn!("Received queue changes for zone {} but no queue cached", zone_id);
+                        }
+                    } else {
+                        log::warn!("Received queue changes but no active queue zone subscription");
+                    }
+                }
+                Parsed::Error(err) => {
+                    log::error!("Roon API error: {}", err);
+                }
+                _ => {}
+            }
+        }
     }
 
     /// Check if connected to Roon Core

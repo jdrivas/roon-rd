@@ -31,9 +31,15 @@ pub struct AppConfig {
     /// Directory containing *.interchange.json files for multi-opera support
     #[serde(skip_serializing_if = "Option::is_none")]
     pub libretto_dir: Option<String>,
+
+    /// mDNS host name, without ".local". Give each machine running roon-rd its own name,
+    /// so a browser knows which server it's talking to.
+    #[serde(default = "default_mdns_name")]
+    pub mdns_name: String,
 }
 
 fn default_port() -> u16 { 3000 }
+fn default_mdns_name() -> String { "roon-rd".to_string() }
 fn default_carousel_interval() -> u32 { 30 }
 
 impl Default for AppConfig {
@@ -43,6 +49,7 @@ impl Default for AppConfig {
             carousel_interval: default_carousel_interval(),
             libretto: None,
             libretto_dir: None,
+            mdns_name: default_mdns_name(),
         }
     }
 }
@@ -66,6 +73,9 @@ pub struct CliOverrides {
 
     #[serde(skip_serializing_if = "Option::is_none")]
     pub libretto_dir: Option<String>,
+
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub mdns_name: Option<String>,
 }
 
 /// Map a figment metadata provider name to a human-friendly source label.
@@ -129,7 +139,7 @@ pub fn load_config(
     }
 
     // Log each config value with its provenance
-    let keys = &["port", "carousel_interval", "libretto", "libretto_dir"];
+    let keys = &["port", "carousel_interval", "libretto", "libretto_dir", "mdns_name"];
     for key in keys {
         let source = figment.find_metadata(key)
             .map(|meta| source_label(&meta.name))
@@ -146,6 +156,7 @@ pub fn load_config(
                 Some(v) => log::info!("  libretto_dir = {:?} ({})", v, source),
                 None => log::info!("  libretto_dir = <not set>"),
             },
+            "mdns_name" => log::info!("  mdns_name = {:?} ({})", config.mdns_name, source),
             _ => {}
         }
     }
@@ -166,6 +177,7 @@ mod tests {
                 carousel_interval: None,
                 libretto: None,
                 libretto_dir: None,
+                mdns_name: None,
             },
         ).unwrap();
 
@@ -184,6 +196,7 @@ mod tests {
                 carousel_interval: None,
                 libretto: None,
                 libretto_dir: Some("/tmp/librettos".into()),
+                mdns_name: None,
             },
         ).unwrap();
 
@@ -213,6 +226,7 @@ mod tests {
                 carousel_interval: None,
                 libretto: None,
                 libretto_dir: None,
+                mdns_name: None,
             },
         ).unwrap();
 
@@ -243,6 +257,7 @@ mod tests {
             carousel_interval: Some(10),
             libretto: None,
             libretto_dir: None,
+            mdns_name: None,
         };
 
         let figment = Figment::new()
@@ -310,6 +325,7 @@ mod tests {
                 carousel_interval: None,
                 libretto: None,
                 libretto_dir: None,
+                mdns_name: None,
             },
         ).unwrap();
 
